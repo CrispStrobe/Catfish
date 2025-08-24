@@ -1,6 +1,6 @@
-# Enhanced Duplicate File Finder with Interactive GUI
+# Duplicate File Finder with CLI and GUI mode
 
-A high-performance Python application that finds duplicate files between source and destination folders, featuring a complete interactive GUI workflow, efficient CAF index persistence, and thread-safe operation.
+A high-performance Python application that finds duplicate files between source and destination folders, featuring an interactive GUI workflow, efficient index persistence, and thread-safe operation.
 
 Status: work in progress
 
