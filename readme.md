@@ -8,7 +8,7 @@ Status: work in progress
 
 - 🖥️ **Complete Interactive GUI** - Full workflow from path selection to duplicate management
 - 📱 **Responsive Design** - Adapts to screen sizes from laptops to large monitors  
-- ⚡ **CAF Index Persistence** - Dramatically faster subsequent scans using Cathy-compatible indices
+- ⚡ **CAF Index Persistence** - Dramatically faster subsequent scans using Cathy-inspired indices
 - 🧵 **Thread-Safe Operation** - Background processing with real-time progress updates
 - 🎯 **Smart Path Management** - Automatic subdirectory exclusion to prevent double-indexing
 - 🔍 **Advanced Filtering** - Regex-based duplicate selection with mass operations
@@ -80,7 +80,7 @@ python duplicate_finder.py --gui --hash md5
 
 ## Index Persistence (Major Performance Feature)
 
-The application saves file indices as CAF files (Cathy-compatible format) for dramatic performance improvements:
+The application saves file indices as CAF files (Cathy-inspired format) for dramatic performance improvements:
 
 ### First Scan
 - Builds complete file indices for all destination folders
@@ -96,7 +96,6 @@ The application saves file indices as CAF files (Cathy-compatible format) for dr
 - **Automatic Creation** - Indices saved when `--reuse-indices` enabled
 - **Smart Invalidation** - Rebuilt when files change
 - **Manual Control** - Force recreation with `--recreate-indices`
-- **Cross-Compatible** - Works with existing Cathy .caf files
 
 ## Usage Examples
 
@@ -137,24 +136,6 @@ python duplicate_finder.py "C:\Downloads" "D:\Archive" --hash sha256 --recreate-
 - **Double-click** - Copy file path to clipboard  
 - **Status Feedback** - Shows what was copied
 
-### Smart Subdirectory Handling
-If you specify both `C:\Photos` and `C:\Photos\2024`, the application automatically:
-- Excludes `C:\Photos\2024` from separate indexing
-- Prevents duplicate processing of the same files
-- Shows exclusion messages for transparency
-
-## Performance Optimization
-
-### Index Reuse Benefits
-```
-Without Indices:
-Large folder (100,000 files) = 5-15 minutes scan time
-
-With Index Reuse:  
-Same folder = 10-30 seconds scan time
-(50-90x faster!)
-```
-
 ### When to Use Hash Comparison
 - **Filename+Size (Default)** - Fastest, good for basic duplicate detection
 - **MD5 Hash** - Balanced speed/accuracy, detects renamed files
@@ -167,41 +148,6 @@ Same folder = 10-30 seconds scan time
 - **Memory** - Minimum 2GB RAM (4GB+ recommended for large folders)
 - **Storage** - Space for .caf index files (typically 1-5MB per indexed folder)
 - **Permissions** - Read access to all folders being scanned
-
-## Responsive Design
-
-The GUI automatically adapts to your screen:
-
-### Large Screens (≥1200px width)
-- Wide column layouts in tree views
-- Larger window size (up to 1400x1000)
-- Comfortable spacing and button layouts
-
-### Smaller Screens (<1200px width)  
-- Compact column widths
-- Smaller window size (minimum 800x600)
-- Optimized button arrangements
-- Maintains full functionality
-
-## Safety Features
-
-### Interactive Deletion
-- Visual size calculations before deletion
-- Detailed confirmation dialogs  
-- Individual file selection control
-- Undo not possible - files permanently deleted
-
-### Batch File Generation
-- Alternative to direct deletion
-- Review commands before execution
-- Proper path quoting and Unicode support
-- Can be edited before running
-
-### Thread Safety
-- All GUI updates happen on main thread
-- Background processing isolated from UI
-- Proper cancellation handling
-- No race conditions or crashes
 
 ## Troubleshooting
 
@@ -232,7 +178,7 @@ sudo apt-get install python3-tk
 ## Technical Architecture
 
 ### CAF File Format
-- Binary format compatible with Cathy disk cataloger
+- Binary format inspired by Cathy disk cataloger
 - Stores file metadata, directory structure, and optional hashes
 - Efficient loading/saving with proper endianness handling
 - Extended comment field for hash storage
