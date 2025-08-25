@@ -223,6 +223,15 @@ class Translator:
                 'found': 'Gefunden',
                 'files_with_duplicates': 'Dateien mit Duplikaten',
                 'total_size': 'Gesamtgröße',
+
+                'selected': 'Ausgewählt',
+                'source_duplicates': 'Quell-Duplikate',
+                'destination_duplicates': 'Ziel-Duplikate', 
+                'index_info': 'Index-Info',
+                'last_updated': 'Zuletzt aktualisiert',
+                'update_index': 'Index aktualisieren',
+                'multiple_indices_found': 'Mehrere Indices gefunden',
+                'select_indices_to_update': 'Wählen Sie zu aktualisierende Indices:',
                 
                 # Results and Actions
                 'duplicate_manager': 'Duplikat-Dateiverwaltung',
@@ -404,6 +413,26 @@ class Config:
     def set(self, key: str, value):
         """Set configuration value."""
         self.config[key] = value
+
+    def get_active_indices(self) -> Set[str]:
+        """Get set of active index file paths."""
+        return set(self.config.get('active_indices', []))
+
+    def set_index_active(self, index_path: str, active: bool):
+        """Set active state for an index."""
+        active_indices = set(self.config.get('active_indices', []))
+        if active:
+            active_indices.add(index_path)
+        else:
+            active_indices.discard(index_path)
+        self.config['active_indices'] = list(active_indices)
+
+    def is_index_active(self, index_path: str) -> bool:
+        """Check if index is active (default True for new indices)."""
+        active_indices = self.config.get('active_indices', None)
+        if active_indices is None:
+            return True  # Default to active for new indices
+        return index_path in active_indices
 
 # --- Utility Functions ---
 
@@ -932,9 +961,9 @@ class DuplicateResultsWindow:
         # Make modal
         self.root.transient(parent.root)
         self.root.grab_set()
-    
+
     def setup_ui(self):
-        """Setup the GUI components"""
+        """Setup the GUI components with enhanced duplicate selection"""
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
@@ -947,8 +976,18 @@ class DuplicateResultsWindow:
         except:
             total_size_bytes = 0
             
-        info_text = f"Method: {self.method} | Found {len(self.duplicates)} files with duplicates | Total Size: {format_size(total_size_bytes)}"
+        info_text = f"{t.get('method')}: {self.method} | {t.get('found')} {len(self.duplicates)} {t.get('files_with_duplicates')} | {t.get('total_size')}: {format_size(total_size_bytes)}"
         ttk.Label(info_frame, text=info_text).pack(anchor=tk.W)
+        
+        # Selection mode frame
+        mode_frame = ttk.Frame(info_frame)
+        mode_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        self.selection_mode_var = tk.StringVar(value="source")
+        ttk.Radiobutton(mode_frame, text=t.get('source_duplicates'), variable=self.selection_mode_var, 
+                    value="source", command=self.on_selection_mode_change).pack(side=tk.LEFT)
+        ttk.Radiobutton(mode_frame, text=t.get('destination_duplicates'), variable=self.selection_mode_var, 
+                    value="destination", command=self.on_selection_mode_change).pack(side=tk.LEFT, padx=(20, 0))
         
         # Filter frame
         filter_frame = ttk.LabelFrame(main_frame, text=t.get('filter'), padding=10)
@@ -1010,24 +1049,54 @@ class DuplicateResultsWindow:
         self.status_var.set(t.get('no_selection_status'))
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
         status_bar.pack(fill=tk.X, pady=(10, 0))
-    
+
     def populate_tree(self):
-        """Populate the tree view with duplicates"""
+        """Populate the tree view with duplicates - enhanced for both source and destination selection"""
         for i, duplicate in enumerate(self.duplicates):
             try:
                 source_size = duplicate.source_file.stat().st_size
                 source_id = self.tree.insert('', 'end', 
-                                           text=f"☐ {duplicate.source_file.name}",
-                                           values=(f"{source_size:,} bytes", str(duplicate.source_file)),
-                                           tags=('source', f'dup_{i}'))
+                                        text=f"☐ {duplicate.source_file.name}",
+                                        values=(f"{source_size:,} bytes", str(duplicate.source_file)),
+                                        tags=('source', f'dup_{i}'))
                 
-                for dest in duplicate.destinations:
-                    self.tree.insert(source_id, 'end',
-                                   text=f"→ {dest.path.name}",
-                                   values=(f"{dest.size:,} bytes", str(dest.path)),
-                                   tags=('destination',))
+                for j, dest in enumerate(duplicate.destinations):
+                    dest_id = self.tree.insert(source_id, 'end',
+                                text=f"☐ → {dest.path.name}",
+                                values=(f"{dest.size:,} bytes", str(dest.path)),
+                                tags=('destination', f'dup_{i}_{j}'))
             except OSError:
                 continue
+
+    def on_selection_mode_change(self):
+        """Handle selection mode change between source and destination"""
+        # Clear all selections when mode changes
+        self.deselect_all()
+
+    def on_tree_click(self, event):
+        """Handle tree item clicks for selection - enhanced for mode awareness"""
+        item = self.tree.identify_row(event.y)
+        if item:
+            tags = self.tree.item(item, 'tags')
+            mode = self.selection_mode_var.get()
+            
+            if mode == "source" and 'source' in tags and 'hidden' not in tags:
+                self.toggle_selection(item)
+            elif mode == "destination" and 'destination' in tags and 'hidden' not in tags:
+                self.toggle_selection(item)
+
+    def update_status(self):
+        """Update status bar with selection count"""
+        count = len(self.selected_for_deletion)
+        if count > 0:
+            try:
+                total_size = sum(Path(self.tree.item(item, 'values')[1]).stat().st_size 
+                            for item in self.selected_for_deletion)
+                self.status_var.set(f"{t.get('selected')}: {count} files ({total_size/1024/1024:.1f} MB)")
+            except:
+                self.status_var.set(f"{t.get('selected')}: {count} files")
+        else:
+            self.status_var.set(t.get('no_selection_status'))
     
     def on_filter_change(self, event):
         """Handle filter text changes"""
@@ -1053,14 +1122,6 @@ class DuplicateResultsWindow:
                     self.tree.item(item, tags=tuple(current_tags))
         except re.error:
             pass
-    
-    def on_tree_click(self, event):
-        """Handle tree item clicks for selection"""
-        item = self.tree.identify_row(event.y)
-        if item:
-            tags = self.tree.item(item, 'tags')
-            if 'source' in tags and 'hidden' not in tags:
-                self.toggle_selection(item)
     
     def on_space_key(self, event):
         """Handle space key for selection"""
@@ -1103,19 +1164,6 @@ class DuplicateResultsWindow:
         """Deselect all items"""
         for item in list(self.selected_for_deletion):
             self.toggle_selection(item)
-    
-    def update_status(self):
-        """Update status bar with selection count"""
-        count = len(self.selected_for_deletion)
-        if count > 0:
-            try:
-                total_size = sum(Path(self.tree.item(item, 'values')[1]).stat().st_size 
-                               for item in self.selected_for_deletion)
-                self.status_var.set(f"Selected: {count} files ({total_size/1024/1024:.1f} MB)")
-            except:
-                self.status_var.set(f"Selected: {count} files")
-        else:
-            self.status_var.set(t.get('no_selection_status'))
     
     def delete_selected_files(self):
         """Delete selected files directly"""
@@ -1420,8 +1468,283 @@ def run_scan_with_progress(config: ScanConfig, parent) -> List[DuplicateMatch]:
     
     return duplicates if not progress_window.cancelled.is_set() else []
 
-# --- Main Application GUI ---
+class IndexBrowserWindow:
+    """Window for browsing index contents without requiring mounted volumes."""
+    
+    def __init__(self, parent, caf_path: Path):
+        self.parent = parent
+        self.caf_path = caf_path
+        self.file_entries = []
+        
+        self.root = tk.Toplevel(parent)
+        self.root.title(f"Browse Index: {caf_path.name}")
+        
+        # Responsive geometry
+        screen_width, screen_height = get_screen_geometry()
+        geometry = calculate_window_geometry(screen_width, screen_height)
+        self.root.geometry(geometry)
+        
+        self.setup_ui()
+        self.load_index_contents()
+        
+        # Make modal
+        self.root.transient(parent)
+        self.root.grab_set()
+    
+    def setup_ui(self):
+        """Setup the browser UI."""
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Info frame
+        info_frame = ttk.LabelFrame(main_frame, text="Index Information", padding=10)
+        info_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.info_var = tk.StringVar()
+        self.info_var.set("Loading index...")
+        ttk.Label(info_frame, textvariable=self.info_var).pack(anchor=tk.W)
+        
+        # Search frame
+        search_frame = ttk.LabelFrame(main_frame, text="Search in Index", padding=10)
+        search_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        search_inner = ttk.Frame(search_frame)
+        search_inner.pack(fill=tk.X)
+        
+        ttk.Label(search_inner, text="Filter:").pack(side=tk.LEFT)
+        self.search_var = tk.StringVar()
+        self.search_entry = ttk.Entry(search_inner, textvariable=self.search_var)
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 10))
+        self.search_entry.bind('<KeyRelease>', self.on_search_change)
+        
+        ttk.Button(search_inner, text="Clear", command=self.clear_search).pack(side=tk.RIGHT)
+        
+        # Files tree
+        tree_frame = ttk.Frame(main_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        
+        columns = ('Size', 'Modified', 'Path', 'Status')
+        self.files_tree = ttk.Treeview(tree_frame, columns=columns, show='tree headings')
+        self.files_tree.heading('#0', text='Filename')
+        self.files_tree.heading('Size', text='Size')
+        self.files_tree.heading('Modified', text='Modified')
+        self.files_tree.heading('Path', text='Full Path')
+        self.files_tree.heading('Status', text='Exists')
+        
+        # Column widths
+        self.files_tree.column('#0', width=200, minwidth=150)
+        self.files_tree.column('Size', width=80, minwidth=60)
+        self.files_tree.column('Modified', width=120, minwidth=100)
+        self.files_tree.column('Path', width=350, minwidth=250)
+        self.files_tree.column('Status', width=60, minwidth=50)
+        
+        # Scrollbars
+        v_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.files_tree.yview)
+        h_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.files_tree.xview)
+        self.files_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        self.files_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        # Bind events
+        self.files_tree.bind('<Double-Button-1>', self.on_file_double_click)
+        self.files_tree.bind('<Button-3>', self.on_file_right_click)
+        
+        # Action buttons
+        action_frame = ttk.Frame(main_frame)
+        action_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Button(action_frame, text="Export List", command=self.export_file_list).pack(side=tk.LEFT)
+        ttk.Button(action_frame, text="Copy Path", command=self.copy_selected_path).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(action_frame, text="Close", command=self.close).pack(side=tk.RIGHT)
+        
+        # Status bar
+        self.status_var = tk.StringVar()
+        status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
+        status_bar.pack(fill=tk.X, pady=(10, 0))
+    
+    def load_index_contents(self):
+        """Load and display index contents."""
+        try:
+            # Load index using existing FileIndex method
+            file_index = FileIndex.load_from_caf(self.caf_path, False, 'md5')  # Hash doesn't matter for browsing
+            
+            if not file_index:
+                self.info_var.set("Failed to load index")
+                return
+            
+            # Extract all file entries
+            self.file_entries = []
+            for size, entries in file_index.size_index.items():
+                self.file_entries.extend(entries)
+            
+            # Update info
+            total_files = len(self.file_entries)
+            total_size = sum(entry.size for entry in self.file_entries)
+            existing_files = sum(1 for entry in self.file_entries if entry.path.exists())
+            
+            info_text = f"Total files: {total_files:,} | Total size: {format_size(total_size)} | "
+            info_text += f"Existing: {existing_files:,} ({existing_files/total_files*100:.1f}%)"
+            self.info_var.set(info_text)
+            
+            # Populate tree
+            self.populate_files_tree()
+            self.status_var.set(f"Loaded {total_files:,} files from index")
+            
+        except Exception as e:
+            self.info_var.set(f"Error loading index: {e}")
+            self.status_var.set("Failed to load index")
+    
+    def populate_files_tree(self, filter_text=None):
+        """Populate the files tree with optional filtering."""
+        # Clear existing items
+        for item in self.files_tree.get_children():
+            self.files_tree.delete(item)
+        
+        # Apply filter
+        entries_to_show = self.file_entries
+        if filter_text:
+            try:
+                pattern = re.compile(filter_text, re.IGNORECASE)
+                entries_to_show = [entry for entry in self.file_entries 
+                                 if pattern.search(entry.path.name) or pattern.search(str(entry.path))]
+            except re.error:
+                entries_to_show = [entry for entry in self.file_entries 
+                                 if filter_text.lower() in entry.path.name.lower() or 
+                                    filter_text.lower() in str(entry.path).lower()]
+        
+        # Sort by path
+        entries_to_show.sort(key=lambda x: str(x.path))
+        
+        # Populate tree
+        for entry in entries_to_show:
+            filename = entry.path.name
+            size_str = format_size(entry.size)
+            modified_str = dt.fromtimestamp(entry.mtime).strftime('%Y-%m-%d %H:%M')
+            path_str = str(entry.path)
+            exists_str = "Yes" if entry.path.exists() else "No"
+            
+            # Color coding for existing vs non-existing files
+            tags = ('exists',) if entry.path.exists() else ('missing',)
+            
+            self.files_tree.insert('', 'end',
+                                  text=filename,
+                                  values=(size_str, modified_str, path_str, exists_str),
+                                  tags=tags)
+        
+        # Configure tag colors
+        self.files_tree.tag_configure('missing', foreground='gray')
+        self.files_tree.tag_configure('exists', foreground='black')
+        
+        self.status_var.set(f"Showing {len(entries_to_show):,} of {len(self.file_entries):,} files")
+    
+    def on_search_change(self, event):
+        """Handle search text changes."""
+        filter_text = self.search_var.get().strip()
+        self.populate_files_tree(filter_text if filter_text else None)
+    
+    def clear_search(self):
+        """Clear search filter."""
+        self.search_var.set("")
+        self.populate_files_tree()
+    
+    def on_file_double_click(self, event):
+        """Handle double-click on file."""
+        selection = self.files_tree.selection()
+        if selection:
+            item = selection[0]
+            path_str = self.files_tree.item(item, 'values')[2]
+            path = Path(path_str)
+            
+            if path.exists():
+                open_file_or_folder(path, open_folder=False)
+            else:
+                messagebox.showinfo("File Not Available", 
+                                  f"File is not currently accessible:\n{path}\n\n"
+                                  "This may be because the volume is not mounted or the file has been moved.")
+    
+    def on_file_right_click(self, event):
+        """Handle right-click context menu."""
+        selection = self.files_tree.selection()
+        if selection:
+            menu = tk.Menu(self.root, tearoff=0)
+            menu.add_command(label="Copy Path", command=self.copy_selected_path)
+            menu.add_command(label="Copy Filename", command=self.copy_selected_filename)
+            menu.add_command(label="Show in Folder", command=self.show_in_folder)
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+    
+    def copy_selected_path(self):
+        """Copy selected file path to clipboard."""
+        selection = self.files_tree.selection()
+        if selection:
+            item = selection[0]
+            path_str = self.files_tree.item(item, 'values')[2]
+            self.root.clipboard_clear()
+            self.root.clipboard_append(path_str)
+            self.status_var.set("Path copied to clipboard")
+    
+    def copy_selected_filename(self):
+        """Copy selected filename to clipboard."""
+        selection = self.files_tree.selection()
+        if selection:
+            item = selection[0]
+            filename = self.files_tree.item(item, 'text')
+            self.root.clipboard_clear()
+            self.root.clipboard_append(filename)
+            self.status_var.set("Filename copied to clipboard")
+    
+    def show_in_folder(self):
+        """Show selected file in folder if it exists."""
+        selection = self.files_tree.selection()
+        if selection:
+            item = selection[0]
+            path_str = self.files_tree.item(item, 'values')[2]
+            path = Path(path_str)
+            
+            if path.exists():
+                open_file_or_folder(path, open_folder=True)
+            else:
+                messagebox.showinfo("File Not Available", "File is not currently accessible.")
+    
+    def export_file_list(self):
+        """Export file list to CSV."""
+        filename = filedialog.asksaveasfilename(
+            title="Export File List",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write("Filename,Size,Size (bytes),Modified,Full Path,Exists\n")
+                    
+                    for item in self.files_tree.get_children():
+                        text = self.files_tree.item(item, 'text').replace('"', '""')
+                        values = [str(v).replace('"', '""') for v in self.files_tree.item(item, 'values')]
+                        size_bytes = next((entry.size for entry in self.file_entries 
+                                         if str(entry.path) == values[2]), 0)
+                        
+                        f.write(f'"{text}","{values[0]}",{size_bytes},"{values[1]}","{values[2]}","{values[3]}"\n')
+                
+                messagebox.showinfo("Success", f"File list exported to:\n{filename}")
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to export file list:\n{e}")
+    
+    def close(self):
+        """Close the browser window."""
+        self.root.destroy()
+    
+    def run(self):
+        """Run the browser window."""
+        self.root.wait_window()
 
+# --- Main Application GUI ---
 class UniversalSearchApp:
     """Main application with tabbed interface."""
     
@@ -1489,6 +1812,78 @@ class UniversalSearchApp:
         self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
         
         self.update_status()
+
+    def on_index_tree_click(self, event):
+        """Handle clicks on the index tree to toggle active state."""
+        item = self.index_tree.identify_row(event.y)
+        column = self.index_tree.identify_column(event.x)
+        
+        if item and column == '#1':  # Active column
+            self.toggle_index_active(item)
+
+    def toggle_index_active(self, item):
+        """Toggle active state of an index."""
+        caf_path_str = self.index_tree.item(item, 'tags')[0]
+        current_active = self.config.is_index_active(caf_path_str)
+        
+        # Toggle state
+        self.config.set_index_active(caf_path_str, not current_active)
+        self.config.save_config()
+        
+        # Update display
+        current_values = list(self.index_tree.item(item, 'values'))
+        current_values[0] = "☐" if current_active else "☑"
+        self.index_tree.item(item, values=current_values)
+        
+        # Update tags
+        new_tags = (caf_path_str, 'inactive' if current_active else 'active')
+        self.index_tree.item(item, tags=new_tags)
+
+    def activate_all_indices(self):
+        """Activate all indices."""
+        for item in self.index_tree.get_children():
+            caf_path_str = self.index_tree.item(item, 'tags')[0]
+            self.config.set_index_active(caf_path_str, True)
+            
+            # Update display
+            current_values = list(self.index_tree.item(item, 'values'))
+            current_values[0] = "☑"
+            self.index_tree.item(item, values=current_values, tags=(caf_path_str, 'active'))
+        
+        self.config.save_config()
+
+    def deactivate_all_indices(self):
+        """Deactivate all indices."""
+        for item in self.index_tree.get_children():
+            caf_path_str = self.index_tree.item(item, 'tags')[0]
+            self.config.set_index_active(caf_path_str, False)
+            
+            # Update display
+            current_values = list(self.index_tree.item(item, 'values'))
+            current_values[0] = "☐"
+            self.index_tree.item(item, values=current_values, tags=(caf_path_str, 'inactive'))
+        
+        self.config.save_config()
+
+    def get_active_indices_only(self) -> List[Path]:
+        """Get only active indices for search operations."""
+        return [caf_path for caf_path in self.available_indices 
+                if self.config.is_index_active(str(caf_path))]
+
+    def browse_index_contents(self):
+        """Browse contents of selected index without requiring mounted volume."""
+        selection = self.index_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select an index to browse.")
+            return
+        
+        item = selection[0]
+        caf_path_str = self.index_tree.item(item, 'tags')[0]
+        caf_path = Path(caf_path_str)
+        
+        # Launch index browser
+        browser = IndexBrowserWindow(self.root, caf_path)
+        browser.run()
     
     def setup_search_tab(self):
         """Setup the main search interface."""
@@ -1587,7 +1982,7 @@ class UniversalSearchApp:
         ttk.Button(action_frame, text=t.get('export_results'), command=self.export_search_results).pack(side=tk.LEFT, padx=(10, 0))
     
     def setup_manage_tab(self):
-        """Setup the index management interface."""
+        """Setup the index management interface with active/inactive controls."""
         main_frame = ttk.Frame(self.manage_frame)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
@@ -1595,23 +1990,28 @@ class UniversalSearchApp:
         list_frame = ttk.LabelFrame(main_frame, text=t.get('available_indices'), padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        # Index tree
+        # Index tree with active column
         tree_frame = ttk.Frame(list_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
         
-        columns = ('Root Path', 'Files', 'Size', 'Created', 'Hash')
+        columns = ('Active', 'Root Path', 'Files', 'Size', 'Created', 'Hash')
         self.index_tree = ttk.Treeview(tree_frame, columns=columns, show='tree headings')
         self.index_tree.heading('#0', text='Index File')
-        for col in columns:
-            self.index_tree.heading(col, text=col)
+        self.index_tree.heading('Active', text='Active')
+        self.index_tree.heading('Root Path', text='Root Path')
+        self.index_tree.heading('Files', text='Files')
+        self.index_tree.heading('Size', text='Size')
+        self.index_tree.heading('Created', text='Created')
+        self.index_tree.heading('Hash', text='Hash')
         
         # Column widths
-        self.index_tree.column('#0', width=200, minwidth=150)
-        self.index_tree.column('Root Path', width=300, minwidth=250)
-        self.index_tree.column('Files', width=80, minwidth=60)
-        self.index_tree.column('Size', width=100, minwidth=80)
-        self.index_tree.column('Created', width=120, minwidth=100)
-        self.index_tree.column('Hash', width=80, minwidth=60)
+        self.index_tree.column('#0', width=180, minwidth=150)
+        self.index_tree.column('Active', width=60, minwidth=50)
+        self.index_tree.column('Root Path', width=280, minwidth=200)
+        self.index_tree.column('Files', width=70, minwidth=60)
+        self.index_tree.column('Size', width=80, minwidth=70)
+        self.index_tree.column('Created', width=100, minwidth=90)
+        self.index_tree.column('Hash', width=70, minwidth=60)
         
         # Scrollbars
         v_scrollbar2 = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.index_tree.yview)
@@ -1625,6 +2025,7 @@ class UniversalSearchApp:
         # Bind events
         self.index_tree.bind('<<TreeviewSelect>>', self.on_index_select)
         self.index_tree.bind('<Double-Button-1>', self.on_index_double_click)
+        self.index_tree.bind('<Button-1>', self.on_index_tree_click)
         
         # Action buttons
         action_frame = ttk.Frame(list_frame)
@@ -1632,7 +2033,15 @@ class UniversalSearchApp:
         
         ttk.Button(action_frame, text=t.get('create_index'), command=self.create_new_index).pack(side=tk.LEFT)
         ttk.Button(action_frame, text=t.get('refresh_indices'), command=self.refresh_indices).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(action_frame, text="Browse Contents", command=self.browse_index_contents).pack(side=tk.LEFT, padx=(10, 0))
         ttk.Button(action_frame, text=t.get('delete_index'), command=self.delete_selected_index).pack(side=tk.LEFT, padx=(10, 0))
+        
+        # Toggle buttons
+        toggle_frame = ttk.Frame(list_frame)
+        toggle_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        ttk.Button(toggle_frame, text="Activate All", command=self.activate_all_indices).pack(side=tk.LEFT)
+        ttk.Button(toggle_frame, text="Deactivate All", command=self.deactivate_all_indices).pack(side=tk.LEFT, padx=(10, 0))
         
         # Index info frame
         info_frame = ttk.LabelFrame(main_frame, text=t.get('index_info'), padding=10)
@@ -1641,15 +2050,15 @@ class UniversalSearchApp:
         self.index_info_var = tk.StringVar()
         self.index_info_var.set("Select an index to view details")
         ttk.Label(info_frame, textvariable=self.index_info_var, justify=tk.LEFT).pack(anchor=tk.W, fill=tk.X)
-    
+        
     def setup_duplicates_tab(self):
-        """Setup the duplicate detection interface."""
+        """Setup the duplicate detection interface with enhanced index management."""
         main_frame = ttk.Frame(self.duplicates_frame)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Title
         ttk.Label(main_frame, text=t.get('duplicates_tab'), 
-                 font=('TkDefaultFont', 16, 'bold')).pack(pady=(0, 20))
+                font=('TkDefaultFont', 16, 'bold')).pack(pady=(0, 20))
         
         # Source selection
         source_frame = ttk.LabelFrame(main_frame, text=t.get('source_folder'), padding=10)
@@ -1659,33 +2068,47 @@ class UniversalSearchApp:
         source_entry = ttk.Entry(source_frame, textvariable=self.dup_source_var, width=50)
         source_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(source_frame, text=t.get('browse_button'), 
-                  command=self.select_duplicate_source).pack(side=tk.RIGHT, padx=(10, 0))
+                command=self.select_duplicate_source).pack(side=tk.RIGHT, padx=(10, 0))
         
-        # Destination selection
+        # Destination selection with index info
         dest_frame = ttk.LabelFrame(main_frame, text=t.get('destination_folders'), padding=10)
         dest_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
         
-        # Destination list with scrollbar
-        list_frame = ttk.Frame(dest_frame)
-        list_frame.pack(fill=tk.BOTH, expand=True)
+        # Enhanced destination tree with index information
+        tree_frame = ttk.Frame(dest_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.dup_dest_listbox = tk.Listbox(list_frame, height=6)
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.dup_dest_listbox.yview)
-        self.dup_dest_listbox.configure(yscrollcommand=scrollbar.set)
+        columns = ('Index File', 'Last Updated', 'Update Index')
+        self.dup_dest_tree = ttk.Treeview(tree_frame, columns=columns, show='tree headings', height=6)
+        self.dup_dest_tree.heading('#0', text='Destination Folder')
+        self.dup_dest_tree.heading('Index File', text=t.get('index_info'))
+        self.dup_dest_tree.heading('Last Updated', text=t.get('last_updated'))
+        self.dup_dest_tree.heading('Update Index', text=t.get('update_index'))
         
-        self.dup_dest_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.dup_dest_tree.column('#0', width=300, minwidth=250)
+        self.dup_dest_tree.column('Index File', width=200, minwidth=150)
+        self.dup_dest_tree.column('Last Updated', width=120, minwidth=100)
+        self.dup_dest_tree.column('Update Index', width=100, minwidth=80)
+        
+        scrollbar_dup = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.dup_dest_tree.yview)
+        self.dup_dest_tree.configure(yscrollcommand=scrollbar_dup.set)
+        
+        self.dup_dest_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_dup.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind events for update checkboxes
+        self.dup_dest_tree.bind('<Button-1>', self.on_dup_tree_click)
         
         # Destination buttons
         dest_buttons = ttk.Frame(dest_frame)
         dest_buttons.pack(fill=tk.X, pady=(10, 0))
         
         ttk.Button(dest_buttons, text=t.get('add_folder'), 
-                  command=self.add_dup_dest_folder).pack(side=tk.LEFT)
+                command=self.add_dup_dest_folder_enhanced).pack(side=tk.LEFT)
         ttk.Button(dest_buttons, text=t.get('remove_selected'), 
-                  command=self.remove_dup_dest_folder).pack(side=tk.LEFT, padx=(10, 0))
+                command=self.remove_dup_dest_folder_enhanced).pack(side=tk.LEFT, padx=(10, 0))
         ttk.Button(dest_buttons, text=t.get('clear_all'), 
-                  command=self.clear_dup_dest_folders).pack(side=tk.LEFT, padx=(10, 0))
+                command=self.clear_dup_dest_folders_enhanced).pack(side=tk.LEFT, padx=(10, 0))
         
         # Options frame
         options_frame = ttk.LabelFrame(main_frame, text=t.get('options'), padding=10)
@@ -1702,7 +2125,7 @@ class UniversalSearchApp:
         
         self.dup_hash_algo_var = tk.StringVar(value=self.config.get('default_hash_algo', 'md5'))
         self.dup_hash_combo = ttk.Combobox(hash_frame, textvariable=self.dup_hash_algo_var, 
-                                          values=["md5", "sha1", "sha256"], width=10, state="readonly")
+                                        values=["md5", "sha1", "sha256"], width=10, state="readonly")
         self.dup_hash_combo.pack(side=tk.LEFT, padx=(10, 0))
         
         # Index options
@@ -1711,20 +2134,16 @@ class UniversalSearchApp:
         
         self.dup_reuse_indices_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(index_frame, text=t.get('reuse_indices'), 
-                       variable=self.dup_reuse_indices_var).pack(side=tk.LEFT)
-        
-        self.dup_recreate_indices_var = tk.BooleanVar()
-        ttk.Checkbutton(index_frame, text=t.get('force_recreation'), 
-                       variable=self.dup_recreate_indices_var).pack(side=tk.LEFT, padx=(20, 0))
+                    variable=self.dup_reuse_indices_var).pack(side=tk.LEFT)
         
         # Action buttons
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=(15, 0))
         
         ttk.Button(button_frame, text=t.get('start_scan'),
-                   command=self.start_duplicate_scan).pack(side=tk.LEFT)
+                command=self.start_duplicate_scan_enhanced).pack(side=tk.LEFT)
         ttk.Button(button_frame, text=t.get('clear_button'),
-                   command=self.clear_duplicate_form).pack(side=tk.LEFT, padx=(10, 0))
+                command=self.clear_duplicate_form_enhanced).pack(side=tk.LEFT, padx=(10, 0))
     
     def setup_settings_tab(self):
         """Setup the settings interface."""
@@ -1790,7 +2209,7 @@ class UniversalSearchApp:
         self.update_status()
     
     def populate_index_tree(self):
-        """Populate the index management tree."""
+        """Populate the index management tree with active states."""
         # Clear existing items
         for item in self.index_tree.get_children():
             self.index_tree.delete(item)
@@ -1798,16 +2217,240 @@ class UniversalSearchApp:
         for caf_path in self.available_indices:
             info = self.index_discovery.get_index_info(caf_path)
             if info:
+                is_active = self.config.is_index_active(str(caf_path))
+                active_text = "☑" if is_active else "☐"
+                
                 self.index_tree.insert('', 'end',
-                                     text=caf_path.name,
-                                     values=(
-                                         str(info.root_path),
-                                         f"{info.file_count:,}",
-                                         format_size(info.total_size),
-                                         info.created_date.strftime('%Y-%m-%d'),
-                                         info.hash_method
-                                     ),
-                                     tags=(str(caf_path),))
+                                    text=caf_path.name,
+                                    values=(
+                                        active_text,
+                                        str(info.root_path),
+                                        f"{info.file_count:,}",
+                                        format_size(info.total_size),
+                                        info.created_date.strftime('%Y-%m-%d'),
+                                        info.hash_method
+                                    ),
+                                    tags=(str(caf_path), 'active' if is_active else 'inactive'))
+                
+    def add_dup_dest_folder_enhanced(self):
+        """Add destination folder with index detection."""
+        folder = filedialog.askdirectory(title="Select Destination Folder")
+        if folder:
+            folder_path = Path(folder)
+            
+            # Check if folder already exists
+            for item in self.dup_dest_tree.get_children():
+                if self.dup_dest_tree.item(item, 'text') == str(folder_path):
+                    messagebox.showwarning("Warning", t.get('duplicate_folder'))
+                    return
+            
+            # Find related indices
+            related_indices = self.find_indices_for_folder(folder_path)
+            
+            if related_indices:
+                # Multiple indices case
+                if len(related_indices) > 1:
+                    selected_index = self.show_index_selection_dialog(folder_path, related_indices)
+                    if not selected_index:
+                        return
+                    index_info = selected_index
+                else:
+                    index_info = related_indices[0]
+                
+                # Add to tree with index information
+                last_updated = index_info['created_date'].strftime('%Y-%m-%d')
+                item_id = self.dup_dest_tree.insert('', 'end',
+                                                text=str(folder_path),
+                                                values=(
+                                                    index_info['path'].name,
+                                                    last_updated,
+                                                    "☐"
+                                                ),
+                                                tags=('dest_folder', str(folder_path)))
+            else:
+                # No index found
+                item_id = self.dup_dest_tree.insert('', 'end',
+                                                text=str(folder_path),
+                                                values=(
+                                                    "No index found",
+                                                    "-",
+                                                    "☑"  # Will need to create index
+                                                ),
+                                                tags=('dest_folder', str(folder_path)))
+            
+            self.dup_dest_paths.append(folder_path)
+
+    def find_indices_for_folder(self, folder_path: Path) -> List[Dict]:
+        """Find all active indices that contain the given folder."""
+        related_indices = []
+        active_indices = self.get_active_indices_only()
+        
+        for caf_path in active_indices:
+            info = self.index_discovery.get_index_info(caf_path)
+            if info:
+                # Check if folder is within the indexed root or if root is within folder
+                try:
+                    if (folder_path.resolve().is_relative_to(info.root_path.resolve()) or 
+                        info.root_path.resolve().is_relative_to(folder_path.resolve())):
+                        related_indices.append({
+                            'path': caf_path,
+                            'root_path': info.root_path,
+                            'created_date': info.created_date,
+                            'hash_method': info.hash_method
+                        })
+                except (ValueError, OSError):
+                    continue
+        
+        return related_indices
+
+    def show_index_selection_dialog(self, folder_path: Path, related_indices: List[Dict]) -> Optional[Dict]:
+        """Show dialog to select which index to use when multiple are found."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(t.get('multiple_indices_found'))
+        dialog.geometry("600x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        selected_index = None
+        
+        ttk.Label(dialog, text=f"{t.get('select_indices_to_update')}\n{folder_path}",
+                font=('TkDefaultFont', 10, 'bold')).pack(pady=10)
+        
+        # List of indices
+        frame = ttk.Frame(dialog)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        var = tk.StringVar()
+        for i, index_info in enumerate(related_indices):
+            text = f"{index_info['path'].name} -> {index_info['root_path']} ({index_info['created_date'].strftime('%Y-%m-%d')})"
+            ttk.Radiobutton(frame, text=text, variable=var, value=str(i)).pack(anchor=tk.W, pady=2)
+        
+        def on_ok():
+            nonlocal selected_index
+            try:
+                idx = int(var.get())
+                selected_index = related_indices[idx]
+                dialog.destroy()
+            except (ValueError, IndexError):
+                messagebox.showerror("Error", "Please select an index.")
+        
+        def on_cancel():
+            dialog.destroy()
+        
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=10)
+        ttk.Button(button_frame, text="OK", command=on_ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=on_cancel).pack(side=tk.LEFT, padx=5)
+        
+        dialog.wait_window()
+        return selected_index
+
+    def on_dup_tree_click(self, event):
+        """Handle clicks on the destination tree to toggle update checkboxes."""
+        item = self.dup_dest_tree.identify_row(event.y)
+        column = self.dup_dest_tree.identify_column(event.x)
+        
+        if item and column == '#3':  # Update Index column
+            current_values = list(self.dup_dest_tree.item(item, 'values'))
+            if len(current_values) >= 3:
+                # Toggle checkbox
+                current_values[2] = "☑" if current_values[2] == "☐" else "☐"
+                self.dup_dest_tree.item(item, values=current_values)
+                
+                # If this index covers multiple folders, update them all
+                self.sync_related_index_updates(item)
+
+    def sync_related_index_updates(self, changed_item):
+        """Sync update status for folders that share the same index."""
+        changed_values = self.dup_dest_tree.item(changed_item, 'values')
+        if len(changed_values) < 2:
+            return
+            
+        changed_index_name = changed_values[0]
+        changed_update_status = changed_values[2]
+        
+        # Find other items with the same index
+        for item in self.dup_dest_tree.get_children():
+            if item != changed_item:
+                values = list(self.dup_dest_tree.item(item, 'values'))
+                if len(values) >= 3 and values[0] == changed_index_name:
+                    values[2] = changed_update_status
+                    self.dup_dest_tree.item(item, values=values)
+
+    def remove_dup_dest_folder_enhanced(self):
+        """Remove selected destination folder from enhanced tree."""
+        selection = self.dup_dest_tree.selection()
+        if selection:
+            for item in selection:
+                folder_path = Path(self.dup_dest_tree.item(item, 'text'))
+                self.dup_dest_tree.delete(item)
+                if folder_path in self.dup_dest_paths:
+                    self.dup_dest_paths.remove(folder_path)
+
+    def clear_dup_dest_folders_enhanced(self):
+        """Clear all destination folders from enhanced tree."""
+        for item in self.dup_dest_tree.get_children():
+            self.dup_dest_tree.delete(item)
+        self.dup_dest_paths.clear()
+
+    def start_duplicate_scan_enhanced(self):
+        """Start duplicate scan with selective index recreation."""
+        # Validate input
+        if not self.dup_source_path:
+            messagebox.showerror(t.get('error'), t.get('select_source'))
+            return
+        
+        if not self.dup_dest_paths:
+            messagebox.showerror(t.get('error'), t.get('select_dest'))
+            return
+        
+        # Determine which indices need updating
+        indices_to_recreate = []
+        for item in self.dup_dest_tree.get_children():
+            values = self.dup_dest_tree.item(item, 'values')
+            if len(values) >= 3 and values[2] == "☑":
+                folder_path = Path(self.dup_dest_tree.item(item, 'text'))
+                indices_to_recreate.append(folder_path)
+        
+        # Create configuration with selective recreation
+        config = ScanConfig(
+            source_path=self.dup_source_path,
+            dest_paths=self.dup_dest_paths,
+            use_hash=self.dup_use_hash_var.get(),
+            hash_algo=self.dup_hash_algo_var.get(),
+            reuse_indices=self.dup_reuse_indices_var.get(),
+            recreate_indices=len(indices_to_recreate) > 0  # Only if some indices need recreation
+        )
+        
+        # Store which specific indices to recreate
+        config.selective_recreation_paths = indices_to_recreate
+        
+        # Run scan
+        duplicates = run_scan_with_progress_enhanced(config, self.root)
+        
+        if not duplicates:
+            if messagebox.askyesno("No Duplicates", t.get('no_duplicates')):
+                return
+            else:
+                return
+        
+        # Show results
+        method = f"{config.hash_algo.upper()} hash + size" if config.use_hash else "filename + size"
+        if config.reuse_indices:
+            method += " (with CAF indices)"
+        
+        results_window = DuplicateResultsWindow(self, duplicates, method)
+        results_window.root.wait_window()
+        
+        # Check if user wants new scan
+        if hasattr(results_window, 'action') and results_window.action == 'new_scan':
+            self.clear_duplicate_form_enhanced()
+
+    def clear_duplicate_form_enhanced(self):
+        """Clear the enhanced duplicate detection form."""
+        self.dup_source_var.set("")
+        self.dup_source_path = None
+        self.clear_dup_dest_folders_enhanced()
     
     def refresh_locations_list(self):
         """Refresh the search locations list."""
@@ -1816,17 +2459,23 @@ class UniversalSearchApp:
             self.locations_listbox.insert(tk.END, location)
     
     def perform_search(self):
-        """Perform file search across all available indices."""
+        """Perform file search across only active indices."""
         try:
             criteria = self.parse_search_criteria()
             self.search_tree.delete(*self.search_tree.get_children())
             self.search_results.clear()
             
+            # Get only active indices
+            active_indices = self.get_active_indices_only()
+            if not active_indices:
+                messagebox.showwarning("No Active Indices", "No active indices found. Please activate at least one index.")
+                return
+            
             self.status_var.set(t.get('searching_status'))
             self.root.update_idletasks()
             
             total_results = 0
-            for caf_path in self.available_indices:
+            for caf_path in active_indices:
                 if caf_path.exists():
                     # Load index and search
                     file_index = self.load_index_for_search(caf_path)
@@ -2427,6 +3076,134 @@ class IndexCreationDialog:
     def run(self):
         """Run the dialog."""
         self.root.wait_window()
+
+
+
+def run_scan_with_progress_enhanced(config: ScanConfig, parent) -> List[DuplicateMatch]:
+    """Enhanced scan with selective index recreation."""
+    progress_window = ProgressWindow(parent, t.get('finding_duplicates'))
+    duplicates = []
+    
+    # Thread-safe communication queue
+    progress_queue = queue.Queue()
+    
+    def update_progress_from_queue():
+        try:
+            while True:
+                message_type, operation, details = progress_queue.get_nowait()
+                if message_type == "progress":
+                    progress_window.update_operation(operation)
+                    progress_window.update_details(details)
+                elif message_type == "error":
+                    messagebox.showerror(t.get('error'), t.get('scan_failed', details))
+                elif message_type == "complete":
+                    progress_window.root.quit()
+                    return
+        except queue.Empty:
+            pass
+        
+        if scan_thread_obj.is_alive():
+            progress_window.root.after(100, update_progress_from_queue)
+    
+    def progress_callback(operation, details):
+        progress_queue.put(("progress", operation, details))
+    
+    def scan_thread():
+        nonlocal duplicates
+        try:
+            # Build destination index with selective recreation
+            dest_index = build_destination_index_selective(config, progress_callback, progress_window.cancelled)
+            
+            if not progress_window.cancelled.is_set() and dest_index:
+                duplicates = find_duplicates_with_locations(config.source_path, dest_index, 
+                                                          progress_callback, progress_window.cancelled)
+            
+        except Exception as e:
+            progress_queue.put(("error", "Error", str(e)))
+        finally:
+            progress_queue.put(("complete", "", ""))
+    
+    scan_thread_obj = Thread(target=scan_thread)
+    scan_thread_obj.daemon = True
+    scan_thread_obj.start()
+    
+    progress_window.root.after(100, update_progress_from_queue)
+    progress_window.root.mainloop()
+    progress_window.root.destroy()
+    
+    scan_thread_obj.join(timeout=1.0)
+    return duplicates if not progress_window.cancelled.is_set() else []
+
+def build_destination_index_selective(config: ScanConfig, progress_callback=None, cancel_event=None) -> Optional[FileIndex]:
+    """Build destination index with selective recreation of specific indices."""
+    filtered_paths = filter_overlapping_paths(config.dest_paths)
+    
+    if progress_callback:
+        progress_callback(t.get('building_index'), f"Processing {len(filtered_paths)} destination folders")
+    
+    dummy_root = Path('.') 
+    combined_index = FileIndex(dummy_root, config.use_hash, config.hash_algo)
+    
+    for i, dest_path in enumerate(filtered_paths):
+        if cancel_event and cancel_event.is_set(): 
+            break
+        if not dest_path.is_dir(): 
+            continue
+
+        caf_path = get_caf_path(dest_path, config.hash_algo)
+        dest_index = None
+
+        if progress_callback:
+            progress_callback(f"Processing folder {i+1}/{len(filtered_paths)}", f"Folder: {dest_path.name}")
+        
+        # Check if this specific path needs recreation
+        force_recreate = (hasattr(config, 'selective_recreation_paths') and 
+                         dest_path in config.selective_recreation_paths)
+        
+        # Try to load existing index (unless forced recreation)
+        if config.reuse_indices and not force_recreate and caf_path.exists():
+            if progress_callback: 
+                progress_callback(f"Loading index for {dest_path.name}", "Please wait...")
+            dest_index = FileIndex.load_from_caf(caf_path, config.use_hash, config.hash_algo)
+        
+        # Build new index if needed
+        if not dest_index:
+            if progress_callback: 
+                progress_callback(f"Creating new index for {dest_path.name}", t.get('scanning_files'))
+            dest_index = FileIndex(dest_path, config.use_hash, config.hash_algo)
+            
+            for root, _, files in os.walk(dest_path):
+                if cancel_event and cancel_event.is_set(): 
+                    break
+                root_path = Path(root)
+                for j, filename in enumerate(files):
+                    if cancel_event and cancel_event.is_set(): 
+                        break
+                    if progress_callback and j % 200 == 0:
+                        progress_callback(f"Indexing {dest_path.name}", f"File: {filename}")
+                    dest_index.add_file(root_path / filename)
+            
+            if cancel_event and cancel_event.is_set(): 
+                break
+
+            # Save the newly created index
+            if config.reuse_indices:
+                if progress_callback: 
+                    progress_callback(f"Saving index for {dest_path.name}", f"Path: {caf_path.name}")
+                dest_index.save_to_caf(caf_path)
+        
+        if not dest_index: 
+            continue
+
+        # Merge into combined index
+        for size, entries in dest_index.size_index.items():
+            combined_index.size_index[size].extend(entries)
+        if config.use_hash:
+            for key, entries in dest_index.hash_index.items():
+                combined_index.hash_index[key].extend(entries)
+        combined_index.total_files += dest_index.total_files
+        
+    return combined_index
 
 # --- Main Entry Point ---
 
