@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Enhanced Duplicate File Finder with Full Interactive GUI
+File Indexer and Finder with Duplicate Handling and Interactive GUI
 
 Features:
 - Complete GUI workflow with path selection and configuration.
 - Interactive duplicate management with regex filtering.
 - Smart folder overlap detection to prevent redundant scanning.
 - Progress tracking and cancellation support for long operations.
-- Caching of file indexes in `.caf` format for much faster subsequent scans.
+- Caching of file indexes in `.caf` format (inspired by Cathy) for much faster subsequent scans.
 - Full command-line interface for scripting and automation.
 """
 
