@@ -81,6 +81,7 @@ class Translator:
                 'deselect_all': 'Deselect All',
                 'delete_selected': 'Delete Selected Files',
                 'generate_script': 'Generate Script...',
+                'index_col': 'Index',
                 
                 # Progress
                 'initializing': 'Initializing...',
@@ -208,6 +209,7 @@ class Translator:
                 'deselect_all': 'Alle abwählen',
                 'delete_selected': 'Ausgewählte Dateien löschen',
                 'generate_script': 'Skript generieren...',
+                'index_col': 'Index',
                 
                 # Progress
                 'initializing': 'Initialisierung...',

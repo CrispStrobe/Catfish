@@ -5,7 +5,7 @@ import os
 import platform
 import subprocess
 import stat
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Dict, Tuple
 import tkinter as tk
 
@@ -51,14 +51,23 @@ def open_file_or_folder(path: Path, open_folder: bool = False):
     """Opens a file or its containing folder using the OS default.
     
     Args:
-        path: Path to open
+        path: Path to open (can be a PurePath for cross-platform safety)
         open_folder: If True, open containing folder instead of file
         
     Raises:
         FileOperationError: If the operation fails
-        FileNotFoundError: If the path doesn't exist
+        FileNotFoundError: If the path doesn't exist or is for a different OS
     """
-    target = path.parent if open_folder else path
+    # Check if path is compatible with current OS before trying to access filesystem
+    is_windows_path_type = isinstance(path, PureWindowsPath)
+    is_on_windows_os = platform.system() == 'Windows'
+    if not ((is_windows_path_type and is_on_windows_os) or \
+           (not is_windows_path_type and not is_on_windows_os)):
+        raise FileNotFoundError(f"Path is not on the current operating system: {path}")
+
+    # Convert to a concrete Path object for filesystem operations
+    concrete_path = Path(path)
+    target = concrete_path.parent if open_folder else concrete_path
     
     if not target.exists():
         raise FileNotFoundError(f"Path does not exist: {target}")

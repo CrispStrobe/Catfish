@@ -22,7 +22,7 @@ from ui.progress_window import ProgressWindow
 from ui.duplicate_results import DuplicateResultsWindow
 from ui.index_browser import IndexBrowserWindow
 from ui.dialogs import IndexCreationDialog
-from utils.file_utils import format_size, parse_size, parse_date
+from utils.file_utils import format_size, parse_size, parse_date, get_display_path
 
 class UniversalSearchApp:
     """Main application with tabbed interface."""
@@ -225,18 +225,20 @@ class UniversalSearchApp:
         tree_frame = ttk.Frame(results_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
         
-        columns = (t.get('size_col'), t.get('modified_col'), t.get('path_col'))
+        columns = (t.get('size_col'), t.get('modified_col'), t.get('index_col'), t.get('path_col'))  # Added index_col
         self.search_tree = ttk.Treeview(tree_frame, columns=columns, show='tree headings')
         self.search_tree.heading('#0', text=t.get('filename_col'))
         self.search_tree.heading(t.get('size_col'), text=t.get('size_col'))
         self.search_tree.heading(t.get('modified_col'), text=t.get('modified_col'))
+        self.search_tree.heading(t.get('index_col'), text=t.get('index_col'))
         self.search_tree.heading(t.get('path_col'), text=t.get('path_col'))
         
         # Column widths
-        self.search_tree.column('#0', width=250, minwidth=200)
-        self.search_tree.column(t.get('size_col'), width=100, minwidth=80)
-        self.search_tree.column(t.get('modified_col'), width=150, minwidth=120)
-        self.search_tree.column(t.get('path_col'), width=400, minwidth=300)
+        self.search_tree.column('#0', width=200, minwidth=150)
+        self.search_tree.column(t.get('size_col'), width=80, minwidth=60)
+        self.search_tree.column(t.get('modified_col'), width=120, minwidth=100)
+        self.search_tree.column(t.get('index_col'), width=150, minwidth=120)
+        self.search_tree.column(t.get('path_col'), width=300, minwidth=200)
         
         # Scrollbars
         v_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.search_tree.yview)
@@ -685,9 +687,11 @@ class UniversalSearchApp:
             self.locations_listbox.insert(tk.END, location)
     
     def perform_search(self):
-        """Perform file search across only active indices with progress tracking."""
+        """Perform file search across only active indices with improved display."""
         try:
             criteria = self.parse_search_criteria()
+            self.search_tree.delete(*self.search_tree.get_children())
+            self.search_results.clear()
             
             # Get only active indices
             active_indices = self.get_active_indices_only()
@@ -695,16 +699,42 @@ class UniversalSearchApp:
                 messagebox.showwarning("No Active Indices", "No active indices found. Please activate at least one index.")
                 return
             
-            # Clear previous results
-            self.search_tree.delete(*self.search_tree.get_children())
-            self.search_results.clear()
+            self.status_var.set(t.get('searching_status'))
+            self.root.update_idletasks()
             
-            # Start search with progress
-            self.run_search_with_progress(criteria, active_indices)
+            total_results = 0
+            for caf_path in active_indices:
+                if caf_path.exists():
+                    # Load index and search
+                    file_index = self.load_index_for_search(caf_path)
+                    if file_index:
+                        results = search_files_in_index(file_index, criteria)
+                        total_results += len(results)
+                        
+                        # Extract clean index name
+                        try:
+                            # Get the filename without .caf extension
+                            index_name = caf_path.name
+                            if index_name.lower().endswith('.caf'):
+                                index_name = index_name[:-4]  # Remove .caf extension
+                            
+                            # Clean up the name further if needed
+                            if '_index' in index_name:
+                                index_name = index_name.replace('_index', '')
+                                
+                        except (AttributeError, TypeError):
+                            index_name = "Unknown"
+                        
+                        # Add results with clean index name
+                        for result in results:
+                            self.add_search_result_to_tree(result, index_name)
+            
+            self.status_var.set(t.get('found_status', total_results))
             
         except Exception as e:
             messagebox.showerror(t.get('error'), t.get('search_error', str(e)))
             self.status_var.set("Search failed")
+
     
     def parse_search_criteria(self) -> SearchCriteria:
         """Parse search criteria from UI."""
@@ -757,18 +787,24 @@ class UniversalSearchApp:
         
         return FileIndex.load_from_caf(caf_path, use_hash, hash_algo)
     
-    def add_search_result_to_tree(self, result: SearchResult):
-        """Add search result to tree."""
+    def add_search_result_to_tree(self, result: SearchResult, index_name: str = ""):
+        """Add search result to tree with FULL ABSOLUTE path display."""
         self.search_results.append(result)
         filename = result.path.name
         size_str = format_size(result.size)
         modified_str = dt.fromtimestamp(result.mtime).strftime('%Y-%m-%d %H:%M')
-        path_str = str(result.path)
+        
+        # Show the COMPLETE absolute path - no shortening!
+        display_path = str(result.path.parent)
+        
+        # Ensure we have a valid index name
+        if not index_name or index_name.strip() == "":
+            index_name = "Unknown"
         
         self.search_tree.insert('', 'end',
-                              text=filename,
-                              values=(size_str, modified_str, path_str),
-                              tags=(len(self.search_results) - 1,))
+                            text=filename,
+                            values=(size_str, modified_str, index_name, display_path),
+                            tags=(len(self.search_results) - 1,))
     
     def clear_search_criteria(self):
         """Clear all search criteria."""
@@ -797,10 +833,12 @@ class UniversalSearchApp:
     def on_search_double_click(self, event):
         """Handle double-click on search result."""
         result = self.get_selected_search_result()
-        if result and result.path.exists():
-            open_file_or_folder(result.path, open_folder=False)
-        elif result:
-            messagebox.showerror(t.get('error'), t.get('file_not_found', result.path))
+        if result:
+            try:
+                # Let the robust open_file_or_folder handle existence and platform checks
+                open_file_or_folder(result.path, open_folder=False)
+            except (FileNotFoundError, FileOperationError) as e:
+                messagebox.showerror(t.get('error'), str(e))
     
     def on_search_right_click(self, event):
         """Handle right-click on search result."""
@@ -847,7 +885,7 @@ class UniversalSearchApp:
             self.root.after(2000, self.update_status)
     
     def export_search_results(self):
-        """Export search results to CSV."""
+        """Export search results to CSV with index information."""
         if not self.search_results:
             messagebox.showwarning("Warning", t.get('no_results'))
             return
@@ -861,14 +899,23 @@ class UniversalSearchApp:
         if filename:
             try:
                 with open(filename, 'w', encoding='utf-8') as f:
-                    f.write("Filename,Size,Size (bytes),Modified,Full Path\n")
-                    for result in self.search_results:
+                    f.write("Filename,Size,Size (bytes),Modified,Index,Full Path\n")
+                    for i, result in enumerate(self.search_results):
+                        # Get the tree item to extract index information
+                        tree_children = list(self.search_tree.get_children())
+                        if i < len(tree_children):
+                            item = tree_children[i]
+                            values = self.search_tree.item(item, 'values')
+                            index_name = values[2] if len(values) > 2 else ""
+                        else:
+                            index_name = ""
+                        
                         filename_clean = result.path.name.replace('"', '""')
                         path_clean = str(result.path).replace('"', '""')
                         size_str = format_size(result.size)
                         modified_str = dt.fromtimestamp(result.mtime).strftime('%Y-%m-%d %H:%M:%S')
                         
-                        f.write(f'"{filename_clean}","{size_str}",{result.size},"{modified_str}","{path_clean}"\n')
+                        f.write(f'"{filename_clean}","{size_str}",{result.size},"{modified_str}","{index_name}","{path_clean}"\n')
                 
                 messagebox.showinfo("Success", t.get('export_complete', filename))
                 
@@ -1114,7 +1161,7 @@ class UniversalSearchApp:
     
     def run_search_with_progress(self, criteria: SearchCriteria, active_indices: List[Path]):
         """Run search with progress window."""
-        from .progress_window import ProgressWindow
+        
         from threading import Thread
         import queue
         
@@ -1133,8 +1180,9 @@ class UniversalSearchApp:
                         progress_window.update_operation(operation)
                         progress_window.update_details(details)
                     elif message_type == "result":
-                        # Add search result to tree
-                        self.add_search_result_to_tree(data)
+                        # Add search result to tree with index name
+                        result, index_name = data
+                        self.add_search_result_to_tree(result, index_name)
                     elif message_type == "error":
                         messagebox.showerror(t.get('error'), t.get('search_error', details))
                     elif message_type == "complete":
@@ -1153,9 +1201,9 @@ class UniversalSearchApp:
             """Thread-safe progress callback"""
             progress_queue.put(("progress", operation, details, None))
         
-        def result_callback(result):
-            """Thread-safe result callback"""
-            progress_queue.put(("result", "", "", result))
+        def result_callback(result, index_name):
+            """Thread-safe result callback with index name"""
+            progress_queue.put(("result", "", "", (result, index_name)))
         
         def search_thread():
             """Background search thread"""
@@ -1171,6 +1219,16 @@ class UniversalSearchApp:
                     if not caf_path.exists():
                         continue
                     
+                    # Extract index name
+                    try:
+                        index_name = caf_path.name
+                        if index_name.lower().endswith('.caf'):
+                            index_name = index_name[:-4]
+                        if '_index' in index_name:
+                            index_name = index_name.replace('_index', '')
+                    except:
+                        index_name = "Unknown"
+                    
                     progress_callback(f"Loading index {i+1}/{len(active_indices)}", f"Loading: {caf_path.name}")
                     
                     # Load index
@@ -1182,7 +1240,7 @@ class UniversalSearchApp:
                     progress_callback(f"Searching index {i+1}/{len(active_indices)}", f"Searching: {caf_path.name} ({file_index.total_files:,} files)")
                     
                     # Search in this index
-                    results = self.search_files_in_index_with_progress(file_index, criteria, progress_callback, result_callback, progress_window.cancelled)
+                    results = self.search_files_in_index_with_progress(file_index, criteria, progress_callback, result_callback, progress_window.cancelled, index_name)
                     total_results += len(results)
                     
                     if progress_window.cancelled.is_set():
@@ -1209,7 +1267,7 @@ class UniversalSearchApp:
         # Wait for thread to complete
         search_thread_obj.join(timeout=1.0)
 
-    def search_files_in_index_with_progress(self, file_index, criteria, progress_callback, result_callback, cancel_event):
+    def search_files_in_index_with_progress(self, file_index, criteria, progress_callback, result_callback, cancel_event, index_name): # Added index_name
         """Search files in an index with progress reporting."""
         results = []
         
@@ -1268,7 +1326,7 @@ class UniversalSearchApp:
                     hash=entry.hash
                 )
                 results.append(result)
-                result_callback(result)
+                result_callback(result, index_name) # Added index_name
         
         return results
     

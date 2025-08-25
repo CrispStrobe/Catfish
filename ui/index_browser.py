@@ -12,7 +12,7 @@ from core.file_index import FileIndex
 from core.data_structures import FileEntry
 from utils.i18n import translator as t
 from utils.platform_utils import get_screen_geometry, calculate_window_geometry, open_file_or_folder
-from utils.file_utils import format_size
+from utils.file_utils import format_size, get_display_path, path_is_native_and_exists
 from utils.platform_utils import open_file_or_folder, FileOperationError
 
 class IndexBrowserWindow:
@@ -129,7 +129,7 @@ class IndexBrowserWindow:
             # Update info
             total_files = len(self.file_entries)
             total_size = sum(entry.size for entry in self.file_entries)
-            existing_files = sum(1 for entry in self.file_entries if entry.path.exists())
+            existing_files = sum(1 for entry in self.file_entries if path_is_native_and_exists(entry.path))
             
             info_text = f"Total files: {total_files:,} | Total size: {format_size(total_size)} | "
             info_text += f"Existing: {existing_files:,} ({existing_files/total_files*100:.1f}%)"
@@ -155,10 +155,10 @@ class IndexBrowserWindow:
             try:
                 pattern = re.compile(filter_text, re.IGNORECASE)
                 entries_to_show = [entry for entry in self.file_entries 
-                                 if pattern.search(entry.path.name) or pattern.search(str(entry.path))]
+                                if pattern.search(entry.path.name) or pattern.search(str(entry.path))]
             except re.error:
                 entries_to_show = [entry for entry in self.file_entries 
-                                 if filter_text.lower() in entry.path.name.lower() or 
+                                if filter_text.lower() in entry.path.name.lower() or 
                                     filter_text.lower() in str(entry.path).lower()]
         
         # Sort by path
@@ -169,23 +169,36 @@ class IndexBrowserWindow:
             filename = entry.path.name
             size_str = format_size(entry.size)
             modified_str = dt.fromtimestamp(entry.mtime).strftime('%Y-%m-%d %H:%M')
-            path_str = str(entry.path)
+            
+            # Clean up path display - show relative path from home
+            try:
+                home_path = Path.home()
+                if entry.path.is_relative_to(home_path):
+                    display_path = "~" / entry.path.relative_to(home_path)
+                else:
+                    display_path = entry.path
+            except (ValueError, OSError):
+                display_path = entry.path
+                
+            path_str = get_display_path(entry.path)
             exists_str = "Yes" if entry.path.exists() else "No"
             
             # Color coding for existing vs non-existing files
-            tags = ('exists',) if entry.path.exists() else ('missing',)
+            exists = path_is_native_and_exists(entry.path)
+            exists_str = "Yes" if exists else "No"
+            tags = ('exists',) if exists else ('missing',)
             
             self.files_tree.insert('', 'end',
-                                  text=filename,
-                                  values=(size_str, modified_str, path_str, exists_str),
-                                  tags=tags)
+                                text=filename,
+                                values=(size_str, modified_str, path_str, exists_str),
+                                tags=tags)
         
-        # Configure tag colors
+        # Configure tag colors - FIX VISIBILITY ISSUE
         self.files_tree.tag_configure('missing', foreground='gray')
-        self.files_tree.tag_configure('exists', foreground='black')
+        self.files_tree.tag_configure('exists', foreground='white')
         
         self.status_var.set(f"Showing {len(entries_to_show):,} of {len(self.file_entries):,} files")
-    
+
     def on_search_change(self, event):
         """Handle search text changes."""
         filter_text = self.search_var.get().strip()

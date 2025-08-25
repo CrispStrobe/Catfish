@@ -4,13 +4,13 @@
 import os
 import time
 import struct
-from pathlib import Path
+from pathlib import Path, PureWindowsPath, PurePosixPath
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 import stat
 
 from core.data_structures import FileEntry
-from utils.file_utils import calculate_file_hash
+from utils.file_utils import calculate_file_hash, path_is_native_and_exists
 
 class FileIndex:
     """
@@ -24,7 +24,7 @@ class FileIndex:
     delim = b'\x00'
 
     def __init__(self, root_path: Path, use_hash: bool = False, hash_algo: str = 'md5'):
-        self.root_path = root_path.resolve()
+        self.root_path = root_path  # Removed .resolve() to support cross-platform PurePath objects
         self.use_hash = use_hash
         self.hash_algo = hash_algo
         
@@ -191,7 +191,11 @@ class FileIndex:
                 # Header parsing
                 buffer.read(4) # Skip date
                 device = cls._read_string(buffer) if version >= 2 else ""
-                index = cls(Path(device), use_hash, hash_algo)
+                
+                # Platform-independent path handling
+                is_windows_path = '\\' in device or (len(device) > 1 and device[1] == ':')
+                PathClass = PureWindowsPath if is_windows_path else PurePosixPath
+                index = cls(PathClass(device), use_hash, hash_algo)
                 
                 cls._read_string(buffer) # volume
                 cls._read_string(buffer) # alias
@@ -239,19 +243,21 @@ class FileIndex:
                 for mtime, size, parent_id, name in raw_elm:
                     if size >= 0 and parent_id in dir_path_map:
                         path = dir_path_map[parent_id] / name
+                        path_exists = path_is_native_and_exists(path)
+                        concrete_path = Path(path) if path_exists else None
                         
                         # For legacy CAF files without size info, try to get actual size if file exists
                         actual_size = size
-                        if version <= 6 and size == 0 and path.exists():
+                        if version <= 6 and size == 0 and path_exists:
                             try:
-                                actual_size = path.stat().st_size
+                                actual_size = concrete_path.stat().st_size
                             except OSError:
                                 actual_size = 0
                         
                         entry_hash = ""
-                        if use_hash and path.exists():
+                        if use_hash and path_exists:
                             # Hashes are not stored in CAF, must be calculated on demand
-                            entry_hash = calculate_file_hash(path, hash_algo)
+                            entry_hash = calculate_file_hash(concrete_path, hash_algo)
                         
                         entry = FileEntry(path, actual_size, mtime, entry_hash)
                         index.size_index[actual_size].append(entry)

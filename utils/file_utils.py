@@ -5,10 +5,31 @@ import hashlib
 import re
 import sys
 import datetime
-from pathlib import Path
+import platform
+from pathlib import Path, PureWindowsPath
 from datetime import datetime as dt
 from typing import Optional, List
 from utils.platform_utils import get_platform_info
+
+def path_is_native_and_exists(path_obj: Path) -> bool:
+    """
+    Checks if a Path/PurePath object is compatible with the native OS and exists on disk.
+    """
+    is_windows_path_type = isinstance(path_obj, PureWindowsPath)
+    is_on_windows_os = platform.system() == 'Windows'
+    
+    path_is_native = (is_windows_path_type and is_on_windows_os) or \
+                   (not is_windows_path_type and not is_on_windows_os)
+
+    if not path_is_native:
+        return False
+    
+    try:
+        # Convert to a concrete Path object for the filesystem check
+        return Path(path_obj).exists()
+    except (TypeError, OSError):
+        # Errors can occur if the path string is invalid on the current OS
+        return False
 
 def format_size(size_bytes: int) -> str:
     """Formats bytes into a human-readable string (KB, MB, GB)."""
@@ -33,26 +54,26 @@ def calculate_file_hash(file_path: Path, hash_algo: str) -> str:
         print(f"Warning: Could not read file {file_path}: {e}", file=sys.stderr)
         return ""
 
-def parse_size(self, size_str: str) -> int:
-        """Parse size string like '5MB', '2.5GB' to bytes."""
-        if not size_str or size_str.lower() == 'any':
-            return 0
-        
-        size_str = size_str.strip().upper()
-        match = re.match(r'^([\d.]+)\s*([KMGT]?B?)$', size_str)  # Fixed: added missing quote and $
-        if not match:
-            raise ValueError(f"Invalid size format: {size_str}")
-        
-        number = float(match.group(1))
-        unit = match.group(2) or 'B'
-        
-        if len(unit) == 1 and unit in "KMGT":
-            unit += 'B'
-        
-        multipliers = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}
-        return int(number * multipliers.get(unit, 1))
+def parse_size(size_str: str) -> int:
+    """Parse size string like '5MB', '2.5GB' to bytes."""
+    if not size_str or size_str.lower() == 'any':
+        return 0
     
-def parse_date(self, date_str: str) -> Optional[dt]:
+    size_str = size_str.strip().upper()
+    match = re.match(r'^([\d.]+)\s*([KMGT]?B?)$', size_str)
+    if not match:
+        raise ValueError(f"Invalid size format: {size_str}")
+    
+    number = float(match.group(1))
+    unit = match.group(2) or 'B'
+    
+    if len(unit) == 1 and unit in "KMGT":
+        unit += 'B'
+    
+    multipliers = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}
+    return int(number * multipliers.get(unit, 1))
+    
+def parse_date(date_str: str) -> Optional[dt]:
     """Parse date string in various formats."""
     if not date_str or date_str.lower() in ['any', '']:
         return None
@@ -90,7 +111,7 @@ def is_subdirectory(child: Path, parent: Path) -> bool:
     try:
         child.resolve().relative_to(parent.resolve())
         return True
-    except ValueError:
+    except (ValueError, OSError):
         return False
 
 def filter_overlapping_paths(paths: List[Path]) -> List[Path]:
@@ -109,12 +130,23 @@ def get_caf_path(dest_path: Path, hash_algo: str) -> Path:
 
 def get_default_script_name() -> str:
     """Generates a default script name with a timestamp."""
-    from .platform_utils import get_platform_info
     from datetime import datetime as dt
     platform_info = get_platform_info()
     return f'delete_duplicates_{dt.now().strftime("%Y%m%d_%H%M%S")}{platform_info["script_ext"]}'
 
 def escape_script_path(path: Path) -> str:
     """Escapes a file path for use in a shell/batch script."""
-    from .platform_utils import get_platform_info
     return get_platform_info()['path_quote'](path)
+
+def get_display_path(file_path: Path) -> str:
+    """Get a user-friendly display path, showing relative to home if possible."""
+    try:
+        # Use str() for comparison to handle PurePath objects correctly
+        home_path_str = str(Path.home())
+        file_path_str = str(file_path)
+        if file_path_str.startswith(home_path_str):
+            # Recreate path object to use relative_to
+            return "~/" + str(Path(file_path).relative_to(Path.home()))
+        return file_path_str
+    except (ValueError, OSError):
+        return str(file_path)

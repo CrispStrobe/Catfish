@@ -61,12 +61,13 @@ def search_files_in_index(file_index: FileIndex, criteria: SearchCriteria) -> Li
     
     return results
 
-def build_destination_index_selective(config: ScanConfig, progress_callback=None, cancel_event=None) -> Optional[FileIndex]:
+def build_destination_index_selective(config: ScanConfig, progress_callback=None, cancel_event=None, translator_get_func=None) -> Optional[FileIndex]:
     """Build destination index with selective recreation of specific indices."""
+    t_get = translator_get_func or t.get
     filtered_paths = filter_overlapping_paths(config.dest_paths)
     
     if progress_callback:
-        progress_callback(t.get('building_index'), f"Processing {len(filtered_paths)} destination folders")
+        progress_callback(t_get('building_index'), f"Processing {len(filtered_paths)} destination folders")
     
     dummy_root = Path('.') 
     combined_index = FileIndex(dummy_root, config.use_hash, config.hash_algo)
@@ -95,8 +96,9 @@ def build_destination_index_selective(config: ScanConfig, progress_callback=None
         
         # Build new index if needed
         if not dest_index:
-            if progress_callback: 
-                progress_callback(f"Creating new index for {dest_path.name}", t.get('scanning_files'))
+            if progress_callback:
+                progress_callback(f"Creating new index for {dest_path.name}", t_get('scanning_files'))
+
             dest_index = FileIndex(dest_path, config.use_hash, config.hash_algo)
             
             for root, _, files in os.walk(dest_path):
