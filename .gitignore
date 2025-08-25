@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
-
+*.spec
+dist/*
+!dist/*.dmg
+!dist/*.exe
+build/*
