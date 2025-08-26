@@ -571,8 +571,8 @@ class UniversalSearchApp:
             if info:
                 # Check if folder is within the indexed root or if root is within folder
                 try:
-                    if (folder_path.resolve().is_relative_to(info.root_path.resolve()) or 
-                        info.root_path.resolve().is_relative_to(folder_path.resolve())):
+                    if (folder_path.resolve().is_relative_to(Path(info.root_path).resolve()) or 
+                    Path(info.root_path).resolve().is_relative_to(folder_path.resolve())):
                         related_indices.append({
                             'path': caf_path,
                             'root_path': info.root_path,

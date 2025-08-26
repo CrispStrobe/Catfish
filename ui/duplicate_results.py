@@ -190,29 +190,50 @@ class DuplicateResultsWindow:
             self.status_var.set(t.get('no_selection_status'))
     
     def on_filter_change(self, event):
-        """Handle filter text changes"""
+        """Handle filter text changes and correctly un-hide items."""
         filter_text = self.filter_var.get()
-        if not filter_text:
-            # Show all items
-            for item in self.tree.get_children():
-                self.tree.item(item, tags=self.tree.item(item, 'tags'))
-            return
         
         try:
-            pattern = re.compile(filter_text, re.IGNORECASE)
-            for item in self.tree.get_children():
-                source_path = self.tree.item(item, 'values')[1]
-                if pattern.search(source_path):
-                    # Keep visible
-                    pass
-                else:
-                    # Hide by changing tags
-                    current_tags = list(self.tree.item(item, 'tags'))
-                    if 'hidden' not in current_tags:
-                        current_tags.append('hidden')
-                    self.tree.item(item, tags=tuple(current_tags))
+            # Compile pattern only if filter_text is not empty
+            pattern = re.compile(filter_text, re.IGNORECASE) if filter_text else None
+            
+            # Iterate through all items and their children
+            for item in self.tree.get_children(''):
+                # Process the parent item
+                self._filter_item(item, pattern)
+                # Process child items
+                for child_item in self.tree.get_children(item):
+                    self._filter_item(child_item, pattern)
+
         except re.error:
+            # If regex is invalid, do nothing
             pass
+
+    def _filter_item(self, item, pattern):
+        """Helper to show/hide a single tree item based on a regex pattern."""
+        tags = list(self.tree.item(item, 'tags'))
+        item_path = self.tree.item(item, 'values')[1]
+        
+        # Determine if the item should be visible
+        is_visible = not pattern or pattern.search(item_path)
+
+        if is_visible:
+            # If it should be visible, REMOVE the 'hidden' tag
+            if 'hidden' in tags:
+                tags.remove('hidden')
+                self.tree.item(item, tags=tuple(tags))
+            # Detach and re-attach to force redraw in correct position
+            parent = self.tree.parent(item)
+            index = self.tree.index(item)
+            self.tree.detach(item)
+            self.tree.move(item, parent, index)
+        else:
+            # If it should be hidden, ADD the 'hidden' tag
+            if 'hidden' not in tags:
+                tags.append('hidden')
+                self.tree.item(item, tags=tuple(tags))
+            # Detach to hide
+            self.tree.detach(item)
     
     def on_space_key(self, event):
         """Handle space key for selection"""

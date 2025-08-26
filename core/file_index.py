@@ -396,42 +396,37 @@ class FileIndex:
     def _find_hash_duplicates_optimized(self, file_path: Path, file_size: int) -> List[FileEntry]:
         """Hash-based duplicate detection with on-demand hash calculation."""
         
-        # Step 1: Quick size pre-filtering using raw elm data (very fast)
+        # Step 1: Quick size pre-filtering (this part is correct)
         size_candidates = []
         if hasattr(self, 'raw_elm'):
-            # Use raw data for initial size filtering
             dir_path_map = self._get_or_build_dir_map()
             for mtime, size, parent_id, filename in self.raw_elm:
                 if size == file_size and size >= 0 and parent_id in dir_path_map:
                     candidate_path = dir_path_map[parent_id] / filename
                     size_candidates.append((candidate_path, mtime, size))
         else:
-            # Fall back to existing size_index if available
             self._ensure_indexes_built()
             size_candidates = [(entry.path, entry.mtime, entry.size) for entry in self.size_index.get(file_size, [])]
-        
+
         if not size_candidates:
             return []
         
-        # Step 2: Calculate hash for source file only once
+        # Step 2: Calculate hash for the source file only once
         source_hash = calculate_file_hash(file_path, self.hash_algo)
         if not source_hash:
             return []
         
-        # Step 3: Calculate hashes only for size-matched candidates
+        # Step 3: Calculate hashes ONLY for candidates that exist locally
         matches = []
         for candidate_path, mtime, size in size_candidates:
-            # Skip if file doesn't exist on current OS
-            if not path_is_native_and_exists(candidate_path):
-                # Create entry without hash for cross-platform compatibility
-                matches.append(FileEntry(candidate_path, size, mtime, ""))
-                continue
-                
-            # Calculate hash only for existing, size-matched files
-            candidate_hash = calculate_file_hash(Path(candidate_path), self.hash_algo)
-            if candidate_hash and candidate_hash == source_hash:
-                matches.append(FileEntry(candidate_path, size, mtime, candidate_hash))
-        
+            # FIX: Only proceed if the file exists on the current system
+            if path_is_native_and_exists(candidate_path):
+                # Calculate hash only for existing, size-matched files
+                candidate_hash = calculate_file_hash(Path(candidate_path), self.hash_algo)
+                if candidate_hash and candidate_hash == source_hash:
+                    matches.append(FileEntry(candidate_path, size, mtime, candidate_hash))
+            # If the file doesn't exist locally, we can't verify its hash, so it's NOT a match.
+            
         return matches
 
     def _find_name_duplicates_optimized(self, file_path: Path, file_size: int) -> List[FileEntry]:
