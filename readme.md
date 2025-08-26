@@ -1,230 +1,188 @@
-# Duplicate File Finder with CLI and GUI mode
+# File Search & Index Tool
 
-A high-performance Python application that finds duplicate files between source and destination folders, featuring an interactive GUI workflow, efficient index persistence, and thread-safe operation.
+A high-performance, cross-platform desktop application for indexing drives or folders, searching for files instantly, and finding duplicates. Built with Python and Tkinter, this tool is designed to be fast, efficient, and user-friendly, with both a complete GUI and a flexible command-line interface.
 
-Status: work in progress
+It creates and uses catalog files (`.caf`) that are backwards-compatible with the classic [Cathy](http://www.mtg.sk/rva/cathy/cathy.html) cataloging tool, while extending its functionality with modern hashing algorithms and features.
 
-## Features
+-----
 
-- 🖥️ **Complete Interactive GUI** - Full workflow from path selection to duplicate management
-- 📱 **Responsive Design** - Adapts to screen sizes from laptops to large monitors  
-- ⚡ **CAF Index Persistence** - Dramatically faster subsequent scans using Cathy-inspired indices
-- 🧵 **Thread-Safe Operation** - Background processing with real-time progress updates
-- 🎯 **Smart Path Management** - Automatic subdirectory exclusion to prevent double-indexing
-- 🔍 **Advanced Filtering** - Regex-based duplicate selection with mass operations
-- 📋 **Path Integration** - Copy file paths to clipboard with Ctrl+C or double-click
-- 🛡️ **Safe Deletion** - Interactive selection with size calculations and confirmations
-- 📊 **Multiple Hash Algorithms** - MD5, SHA1, or SHA256 with filename+size fallback
-- 🔄 **Seamless Workflow** - From setup through results with cancellation support
+## Key Features
 
-## Quick Start
+  - 🖥️ **Dual Interface:** Choose between a complete interactive GUI for visual workflow or a powerful CLI for scripting and automation.
+  - ⚡ **Fast File Indexing (CAF Persistence):** Scans are dramatically faster on subsequent runs by creating and reusing `.caf` index files.
+  - 👯 **Advanced Duplicate Finder:**
+      - Compare a source folder against multiple destination folders.
+      - Use MD5, SHA1, or SHA256 hashes for byte-perfect comparison.
+  - 🔍 **Powerful Search:** Instantly search indexed files using filters for filename (with regex), file size, and modification date.
+  - 💻 **Cross-Platform:** A single Python codebase that runs and builds for Windows, macOS, and Linux.
+  - 🌐 **Offline Index Browsing:** Browse the contents of an index file even if the original drive is disconnected—perfect for checking archived drives.
+  - 🌍 **Multi-Lingual Support:** Interface available in English and German, with auto-detection of system language.
+  - 🛡️ **Safe Deletion Workflow:** Interactively select duplicates, generate safe and reviewable deletion scripts (`.bat` or `.sh`), or delete directly.
+  - 📜 **Scriptable JSON Output:** Both search and duplicate-finding CLI commands can output structured JSON for easy integration with other tools.
 
-### 1. Install Python (if not already installed)
+-----
 
-```powershell
-# Install Python using winget (Windows Package Manager)  
-winget install Python.Python.3.12
+## Getting Started
 
-# Alternative: Install from Microsoft Store
-winget install 9NCVDN91XZQP
+### For Users (Recommended)
 
-# Alternative: Download from python.org
-# Visit https://www.python.org/downloads/ and download Python 3.8+
+Download a pre-built executable for your operating system from the project's **[Releases Page](https://www.google.com/search?q=https://github.com/CrispStrobe/duplicate-finder/releases)**. No installation is required.
+
+### For Developers (Running from Source)
+
+1.  **Clone the repository:**
+
+    ```bash
+    git clone https://github.com/CrispStrobe/duplicate-finder.git
+    cd duplicate-finder
+    ```
+
+2.  **Create and activate a virtual environment (recommended):**
+
+    ```bash
+    # macOS / Linux
+    python3 -m venv venv
+    source venv/bin/activate
+
+    # Windows
+    python -m venv venv
+    .\venv\Scripts\activate
+    ```
+
+3.  **Install dependencies:**
+
+    ```bash
+    pip install Pillow
+    ```
+
+4.  **Run the application:**
+
+    ```bash
+    # To run the GUI (default behavior)
+    python main.py
+
+    # To see help for the Command-Line Interface (CLI)
+    python main.py --help
+    ```
+
+-----
+
+## Usage Guide: GUI Mode
+
+Run the application without any arguments to launch the graphical interface, which is organized into four tabs.
+
+### 1\. Search Files
+
+The main search interface. Filter indexed files by **name (regex)**, **size**, and **modification date**. Results can be opened, located in the file explorer, or have their paths copied.
+
+### 2\. Manage Indices
+
+Manage your `.caf` index files. **Create** new indexes from folders, **Refresh** the list of available indexes, and **Delete** old ones. Use the **Active** checkbox to control which indexes are included in searches.
+
+### 3\. Find Duplicates
+
+Find duplicate files between a source and one or more destinations. Enable **file hashes** for accuracy and **reuse existing indices** for maximum speed.
+
+### 4\. Settings
+
+Configure the application's behavior, including **language**, default **hash algorithm**, and **index search locations**.
+
+-----
+
+## Usage Guide: CLI Mode
+
+The command-line interface is perfect for scripting and automation. Use subcommands `search` or `find-dupes` to perform actions.
+
+### Command: `search`
+
+Searches for files across all active indexes based on the specified criteria.
+
+**Examples:**
+
+```bash
+# Find all JPG files larger than 1MB
+python main.py search "*.jpg" --size-min 1MB
+
+# Find all video files and output the results as JSON
+python main.py search "\.(mp4|mov)$" --output json > videos.json
 ```
 
-### 2. Install Dependencies
+### Command: `find-dupes`
 
-```powershell
-# Install required packages
-pip install tqdm
+Compares a source directory against one or more destination directories to find duplicate files.
 
-# Or using requirements.txt
-pip install -r requirements.txt
+**Examples:**
+
+```bash
+# Find duplicates of files from "C:\Photos" inside "D:\Backup"
+# Use existing indexes for speed.
+python main.py find-dupes "C:\Photos" "D:\Backup" --reuse-indices --hash md5
+
+# Check a download folder against multiple archives and output a JSON report
+python main.py find-dupes ./Downloads ./Archive1 ./Archive2 --output json
 ```
 
-**requirements.txt**
-```
-tqdm>=4.64.0
-```
+-----
 
-### 3. Launch Interactive Mode
+## Building the Application
 
-```powershell
-# Complete GUI workflow - no paths needed!
-python duplicate_finder.py --gui
+A build script is included to create distributable executables using PyInstaller. To build for your current OS, run:
 
-# GUI with hash mode pre-selected  
-python duplicate_finder.py --gui --hash md5
+```bash
+python build_binaries.py
 ```
 
-## GUI Workflow
+The final application will be placed in the `dist/` directory.
 
-### Setup Phase
-- **Browse for Source Folder** - Select the folder to scan for duplicates
-- **Add Destination Folders** - Multiple destinations supported with add/remove
-- **Configure Options** - Choose hash algorithm, enable index persistence
-- **Path Validation** - Real-time validation with helpful error messages
+-----
 
-### Scanning Phase  
-- **Background Processing** - Thread-safe operation with progress updates
-- **Cancellation Support** - Stop scanning at any time
-- **Index Management** - Automatic CAF file creation and reuse
-- **Smart Filtering** - Excludes subdirectories to prevent double-indexing
+## Command-Line Reference
 
-### Results Phase
-- **Interactive Selection** - Checkboxes and spacebar for file selection
-- **Regex Filtering** - `.*\.jpg$` to select only JPG files, etc.
-- **Mass Operations** - "Select All Filtered" for bulk selection
-- **Size Calculations** - Real-time totals for selected files
-- **Safe Deletion** - Confirmation dialogs with detailed information
+### Global Arguments
 
-## Index Persistence (Major Performance Feature)
+| Argument | Description | Options |
+| :--- | :--- | :--- |
+| `command` | The action to perform. | `search`, `find-dupes` |
+| `--lang` | Set language for CLI output messages. | `en`, `de` |
 
-The application saves file indices as CAF files (Cathy-inspired format) for dramatic performance improvements:
+### `search` Arguments
 
-### First Scan
-- Builds complete file indices for all destination folders
-- Saves indices as `.caf` files next to each folder
-- Normal scanning speed
+| Argument | Description | Example |
+| :--- | :--- | :--- |
+| `pattern` | **Required.** Search pattern (regex supported). | `"vacation_.*\.jpg"` |
+| `--size-min`| Minimum file size. | `--size-min 500KB` |
+| `--size-max`| Maximum file size. | `--size-max 2GB` |
+| `--date-min`| Minimum modification date. | `--date-min "2025-01-01"` |
+| `--date-max`| Maximum modification date. | `--date-max "yesterday"` |
+| `--output` | Output format. | `--output json` |
 
-### Subsequent Scans  
-- Loads existing indices in seconds instead of minutes/hours
-- Automatically detects changed files (by size/date)
-- 10-100x faster for unchanged large directories
+### Duplicates finding `find-dupes` Arguments
 
-### Index Management
-- **Automatic Creation** - Indices saved when `--reuse-indices` enabled
-- **Smart Invalidation** - Rebuilt when files change
-- **Manual Control** - Force recreation with `--recreate-indices`
+| Argument | Description |
+| :--- | :--- |
+| `source` | **Required.** The source folder to check for duplicates. |
+| `destinations`| **Required.** One or more destination folders to search within. |
+| `--hash` | Use a hash algorithm for accuracy. If omitted, uses name+size. |
+| `--reuse-indices`| Use existing `.caf` indexes to speed up scans. |
+| `--recreate-indices`| Force recreation of all destination indexes. |
+| `--output` | Output format (`text` or `json`). |
 
-## Usage Examples
+-----
 
-### Interactive GUI Mode (Recommended)
-```powershell
-# Complete interactive experience
-python duplicate_finder.py --gui
+## Project Structure
 
-# With hash comparison preset
-python duplicate_finder.py --gui --hash md5
-
-# Force index recreation
-python duplicate_finder.py --gui --recreate-indices
+```
+duplicate-finder/
+├── core/                  # Core logic (indexing, search, data structures)
+├── ui/                    # GUI components (windows, dialogs)
+├── utils/                 # Helper modules (file I/O, i18n, platform)
+├── main.py                # Main application entry point (GUI and CLI)
+├── build_binaries.py      # Script to build executables
+└── README.md              # This documentation
 ```
 
-### Command Line Mode
-```powershell
-# Basic comparison with index persistence
-python duplicate_finder.py "C:\Downloads" "D:\Archive" --reuse-indices
-
-# Hash comparison with multiple destinations  
-python duplicate_finder.py "C:\Downloads" "D:\Photos" "E:\Backup" --hash md5 --reuse-indices
-
-# Force rebuild all indices
-python duplicate_finder.py "C:\Downloads" "D:\Archive" --hash sha256 --recreate-indices
-```
-
-## Advanced Features
-
-### Regex Filtering Examples
-- `.*\.(jpg|jpeg|png)$` - Select only image files
-- `IMG_\d{4}` - Select files like IMG_1234.jpg  
-- `.*[Dd]uplicate.*` - Select files with "duplicate" in name
-- `.*\.mp4$` - Select only MP4 video files
-
-### Path Copy Integration
-- **Ctrl+C** - Copy selected file path to clipboard
-- **Double-click** - Copy file path to clipboard  
-- **Status Feedback** - Shows what was copied
-
-### When to Use Hash Comparison
-- **Filename+Size (Default)** - Fastest, good for basic duplicate detection
-- **MD5 Hash** - Balanced speed/accuracy, detects renamed files
-- **SHA256 Hash** - Slowest but most secure, for critical data
-
-## System Requirements
-
-- **Operating System** - Windows 10/11, macOS, or Linux
-- **Python** - Version 3.8 or higher
-- **Memory** - Minimum 2GB RAM (4GB+ recommended for large folders)
-- **Storage** - Space for .caf index files (typically 1-5MB per indexed folder)
-- **Permissions** - Read access to all folders being scanned
-
-## Troubleshooting
-
-### GUI Won't Start
-```powershell
-# Check Python/tkinter installation
-python -m tkinter
-
-# Install tkinter if missing (Linux)
-sudo apt-get install python3-tk
-```
-
-### Index Files Not Working
-- Check folder permissions for .caf file creation
-- Verify sufficient disk space for indices  
-- Use `--recreate-indices` to rebuild corrupted indices
-
-### Performance Issues
-- Enable `--reuse-indices` for large folders
-- Use filename+size mode for fastest scanning
-- Process folders in smaller batches if needed
-
-### Path Issues
-- Ensure no files are locked by other applications
-- Check read permissions on all source/destination folders
-- Use GUI path browser to avoid typing errors
-
-## Technical Architecture
-
-### CAF File Format
-- Binary format inspired by Cathy disk cataloger
-- Stores file metadata, directory structure, and optional hashes
-- Efficient loading/saving with proper endianness handling
-- Extended comment field for hash storage
-
-### Thread Model
-- Main GUI thread handles all UI updates
-- Background worker threads for file processing  
-- Queue-based communication for thread safety
-- Proper cleanup and cancellation support
-
-## File Structure
-```
-your-project-folder/
-├── duplicate_finder.py          # Main application
-├── requirements.txt             # Python dependencies  
-├── README.md                   # This documentation
-└── [generated files]
-    ├── FolderName_index.caf    # Index files (auto-generated)
-    ├── delete_duplicates.bat   # Batch file (if generated)
-    └── delete_duplicates_report.txt # Report file (if requested)
-```
-
-## Command Line Reference
-
-### Arguments
-| Argument | Description | Options | Default |
-|----------|-------------|---------|---------|
-| `--gui` | Launch interactive GUI | Flag | False |
-| `source_folder` | Source folder (CLI mode) | Path | Required for CLI |
-| `dest_folders` | Destination folders (CLI mode) | Paths | Required for CLI |
-| `--hash` | Hash algorithm | `md5`, `sha1`, `sha256` | None |
-| `--reuse-indices` | Enable CAF index persistence | Flag | False |
-| `--recreate-indices` | Force rebuild indices | Flag | False |
-
-### Examples
-```powershell  
-# GUI with all features
-python duplicate_finder.py --gui
-
-# CLI with indices  
-python duplicate_finder.py "C:\Downloads" "D:\Archive" --reuse-indices
-
-# Hash mode with index rebuild
-python duplicate_finder.py "C:\Downloads" "D:\Archive" --hash md5 --recreate-indices
-```
+-----
 
 ## License
 
-MIT License - Use at your own risk. Always backup important data before running file deletion operations.
+This project is licensed under the **MIT License**. Use at your own risk. **Always back up important data** before performing file deletion operations.
