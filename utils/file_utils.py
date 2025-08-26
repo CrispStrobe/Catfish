@@ -15,19 +15,24 @@ def path_is_native_and_exists(path_obj: Path) -> bool:
     """
     Checks if a Path/PurePath object is compatible with the native OS and exists on disk.
     """
-    is_windows_path_type = isinstance(path_obj, PureWindowsPath)
-    is_on_windows_os = platform.system() == 'Windows'
-    
-    path_is_native = (is_windows_path_type and is_on_windows_os) or \
-                   (not is_windows_path_type and not is_on_windows_os)
-
-    if not path_is_native:
-        return False
-    
     try:
-        # Convert to a concrete Path object for the filesystem check
-        return Path(path_obj).exists()
-    except (TypeError, OSError):
+        # Convert PurePath to concrete Path for current OS
+        concrete_path = Path(path_obj)
+        
+        # Check if it's the right type of path for current OS
+        is_windows_path_type = isinstance(path_obj, PureWindowsPath)
+        is_on_windows_os = platform.system() == 'Windows'
+        
+        path_is_native = (is_windows_path_type and is_on_windows_os) or \
+                       (not is_windows_path_type and not is_on_windows_os)
+
+        if not path_is_native:
+            return False
+        
+        # Now check if the concrete path exists
+        return concrete_path.exists()
+        
+    except (TypeError, OSError, ValueError):
         # Errors can occur if the path string is invalid on the current OS
         return False
 

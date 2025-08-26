@@ -17,8 +17,8 @@ from core.data_structures import (
 from core.file_index import FileIndex
 from utils.file_utils import filter_overlapping_paths, get_caf_path
 
-def search_files_in_index(file_index: FileIndex, criteria: SearchCriteria) -> List[SearchResult]:
-    """Search for files in index based on criteria"""
+def search_files_in_index_with_raw_elm(file_index: FileIndex, criteria: SearchCriteria) -> List[SearchResult]:
+    """Optimized search using raw elm data without building full indexes"""
     results = []
     
     # Compile regex pattern if provided
@@ -29,15 +29,90 @@ def search_files_in_index(file_index: FileIndex, criteria: SearchCriteria) -> Li
         except re.error as e:
             raise ValueError(t.get('invalid_regex', e))
     
+    # Get or build directory map once
+    dir_path_map = file_index._get_or_build_dir_map()
+    
+    # Search through raw elm data directly
+    for mtime, size, parent_id, filename in file_index.raw_elm:
+        # Skip directories (negative size)
+        if size < 0:
+            continue
+        
+        # Size filtering (most efficient first)
+        if criteria.size_min is not None and size < criteria.size_min:
+            continue
+        if criteria.size_max is not None and size > criteria.size_max:
+            continue
+        
+        # Name filtering
+        if name_regex and not name_regex.search(filename):
+            continue
+        
+        # Check if parent directory exists in map
+        if parent_id not in dir_path_map:
+            continue
+            
+        # Build full path
+        path = dir_path_map[parent_id] / filename
+        
+        # Date filtering
+        if criteria.date_min or criteria.date_max:
+            file_mtime = dt.fromtimestamp(mtime)
+            
+            if criteria.date_min and file_mtime < criteria.date_min:
+                continue
+            if criteria.date_max and file_mtime > criteria.date_max:
+                continue
+        
+        # File passed all criteria
+        results.append(SearchResult(
+            path=path,
+            size=size,
+            mtime=mtime,
+            hash=""  # Hash not stored in CAF, would need calculation
+        ))
+    
+    return results
+
+def search_files_in_index(file_index: FileIndex, criteria: SearchCriteria) -> List[SearchResult]:
+    """Search for files in index based on criteria with verbose logging"""
+    print(f"[SEARCH] Starting search with criteria: name_pattern={criteria.name_pattern}, "
+          f"size_min={criteria.size_min}, size_max={criteria.size_max}, "
+          f"date_min={criteria.date_min}, date_max={criteria.date_max}")
+    
+    results = []
+    
+    # Compile regex pattern if provided
+    name_regex = None
+    if criteria.name_pattern:
+        try:
+            name_regex = re.compile(criteria.name_pattern, re.IGNORECASE)
+            print(f"[SEARCH] Compiled regex pattern: {criteria.name_pattern}")
+        except re.error as e:
+            print(f"[SEARCH] Regex error: {e}")
+            raise ValueError(t.get('invalid_regex', e))
+    
+    print(f"[SEARCH] Index has {len(file_index.size_index)} size buckets")
+    print(f"[SEARCH] Total files in index: {file_index.total_files}")
+    
+    total_entries_examined = 0
+    size_buckets_examined = 0
+    
     # Search through all files in index
     for size, entries in file_index.size_index.items():
+        size_buckets_examined += 1
+        
         # Size filtering
         if criteria.size_min is not None and size < criteria.size_min:
             continue
         if criteria.size_max is not None and size > criteria.size_max:
             continue
         
+        print(f"[SEARCH] Examining size bucket {size} with {len(entries)} entries")
+        
         for entry in entries:
+            total_entries_examined += 1
+            
             # Name filtering
             if name_regex and not name_regex.search(entry.path.name):
                 continue
@@ -52,13 +127,19 @@ def search_files_in_index(file_index: FileIndex, criteria: SearchCriteria) -> Li
                     continue
             
             # File passed all criteria
-            results.append(SearchResult(
+            result = SearchResult(
                 path=entry.path,
                 size=entry.size,
                 mtime=entry.mtime,
                 hash=entry.hash
-            ))
+            )
+            results.append(result)
+            
+            if len(results) <= 10:  # Log first 10 matches
+                print(f"[SEARCH] Match found: {entry.path.name} (size: {entry.size})")
     
+    print(f"[SEARCH] Examined {size_buckets_examined} size buckets, {total_entries_examined} total entries")
+    print(f"[SEARCH] Found {len(results)} matching files")
     return results
 
 def build_destination_index_selective(config: ScanConfig, progress_callback=None, cancel_event=None, translator_get_func=None) -> Optional[FileIndex]:
@@ -193,9 +274,89 @@ def build_destination_index(config: ScanConfig, progress_callback=None, cancel_e
         
     return combined_index
 
+def search_files_in_index_optimized(file_index: FileIndex, criteria: SearchCriteria) -> List[SearchResult]:
+    """Optimized search for files in index based on criteria."""
+    results = []
+    
+    # Compile regex pattern if provided
+    name_regex = None
+    if criteria.name_pattern:
+        try:
+            name_regex = re.compile(criteria.name_pattern, re.IGNORECASE)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern: {e}")
+    
+    # Pre-filter size buckets to avoid unnecessary iterations
+    relevant_size_buckets = []
+    for size in file_index.size_index.keys():
+        if criteria.size_min is not None and size < criteria.size_min:
+            continue
+        if criteria.size_max is not None and size > criteria.size_max:
+            continue
+        relevant_size_buckets.append(size)
+    
+    # Search through relevant size buckets only
+    for size in relevant_size_buckets:
+        entries = file_index.size_index[size]
+        
+        for entry in entries:
+            # Name filtering (most selective first)
+            if name_regex and not name_regex.search(entry.path.name):
+                continue
+            
+            # Date filtering
+            if criteria.date_min or criteria.date_max:
+                file_mtime = dt.fromtimestamp(entry.mtime)
+                
+                if criteria.date_min and file_mtime < criteria.date_min:
+                    continue
+                if criteria.date_max and file_mtime > criteria.date_max:
+                    continue
+            
+            # File passed all criteria
+            results.append(SearchResult(
+                path=entry.path,
+                size=entry.size,
+                mtime=entry.mtime,
+                hash=entry.hash
+            ))
+    
+    return results
+
 def find_duplicates_with_locations(source_path: Path, dest_index: FileIndex, 
                                  progress_callback=None, cancel_event=None) -> List[DuplicateMatch]:
-    """Find duplicates with progress reporting"""
+    """Find duplicates with optimized bulk processing"""
+    
+    # Create a temporary source index for bulk processing
+    source_index = FileIndex(source_path, dest_index.use_hash, dest_index.hash_algo)
+    
+    if progress_callback:
+        progress_callback(t.get('finding_duplicates'), f"Indexing source directory: {source_path.name}")
+    
+    # Quick indexing of source files
+    file_count = 0
+    for root, _, files in os.walk(source_path):
+        if cancel_event and cancel_event.is_set():
+            return []
+        root_path = Path(root)
+        for filename in files:
+            if cancel_event and cancel_event.is_set():
+                return []
+            file_count += 1
+            if progress_callback and file_count % 500 == 0:
+                progress_callback("Indexing source", f"Processed {file_count} source files")
+            source_index.add_file(root_path / filename)
+    
+    if progress_callback:
+        progress_callback(t.get('finding_duplicates'), f"Comparing against destination indices...")
+    
+    # Use the optimized bulk duplicate detection
+    return FileIndex.find_all_duplicates_bulk(source_index, dest_index, progress_callback, cancel_event)
+
+# ADD this alternative function for when you want to use the original approach:
+def find_duplicates_with_locations_legacy(source_path: Path, dest_index: FileIndex, 
+                                        progress_callback=None, cancel_event=None) -> List[DuplicateMatch]:
+    """Original find duplicates implementation (kept for compatibility)"""
     duplicates = []
     source_files = [p for p in source_path.rglob('*') if p.is_file()]
     

@@ -132,7 +132,14 @@ class IndexBrowserWindow:
             existing_files = sum(1 for entry in self.file_entries if path_is_native_and_exists(entry.path))
             
             info_text = f"Total files: {total_files:,} | Total size: {format_size(total_size)} | "
-            info_text += f"Existing: {existing_files:,} ({existing_files/total_files*100:.1f}%)"
+            
+            # Fix division by zero error
+            if total_files > 0:
+                percentage = existing_files/total_files*100
+                info_text += f"Existing: {existing_files:,} ({percentage:.1f}%)"
+            else:
+                info_text += f"Existing: {existing_files:,} (0%)"
+                
             self.info_var.set(info_text)
             
             # Populate tree
@@ -172,33 +179,40 @@ class IndexBrowserWindow:
             
             # Clean up path display - show relative path from home
             try:
-                home_path = Path.home()
-                if entry.path.is_relative_to(home_path):
-                    display_path = "~" / entry.path.relative_to(home_path)
-                else:
-                    display_path = entry.path
-            except (ValueError, OSError):
-                display_path = entry.path
+                # Convert to concrete Path for display
+                display_path = str(Path(entry.path).parent)
                 
-            path_str = get_display_path(entry.path)
-            exists_str = "Yes" if entry.path.exists() else "No"
+                # Try to make it relative to home for cleaner display
+                home_path = Path.home()
+                try:
+                    if Path(entry.path).is_relative_to(home_path):
+                        display_path = "~/" + str(Path(entry.path).parent.relative_to(home_path))
+                except (ValueError, OSError, AttributeError):
+                    pass  # Keep the full path
+                    
+            except (ValueError, OSError):
+                display_path = str(entry.path.parent)
             
-            # Color coding for existing vs non-existing files
-            exists = path_is_native_and_exists(entry.path)
-            exists_str = "Yes" if exists else "No"
-            tags = ('exists',) if exists else ('missing',)
+            # Check if file exists (but don't let it crash if path conversion fails)
+            try:
+                exists = path_is_native_and_exists(entry.path)
+                exists_str = "Yes" if exists else "No"
+                tags = ('exists',) if exists else ('missing',)
+            except:
+                exists_str = "Unknown"
+                tags = ('missing',)
             
             self.files_tree.insert('', 'end',
                                 text=filename,
-                                values=(size_str, modified_str, path_str, exists_str),
+                                values=(size_str, modified_str, display_path, exists_str),
                                 tags=tags)
         
-        # Configure tag colors - FIX VISIBILITY ISSUE
+        # Configure tag colors
         self.files_tree.tag_configure('missing', foreground='gray')
-        self.files_tree.tag_configure('exists', foreground='white')
+        self.files_tree.tag_configure('exists', foreground='black')
         
         self.status_var.set(f"Showing {len(entries_to_show):,} of {len(self.file_entries):,} files")
-
+        
     def on_search_change(self, event):
         """Handle search text changes."""
         filter_text = self.search_var.get().strip()

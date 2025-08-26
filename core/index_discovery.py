@@ -40,6 +40,40 @@ class IndexDiscovery:
         return list(set(indices))  # Remove duplicates
     
     def get_index_info(self, caf_path: Path) -> Optional[IndexInfo]:
+        """Extract information about an index file using fast metadata loading."""
+        from core.file_index import FileIndex
+        
+        metadata = FileIndex.load_metadata_only(caf_path)
+        if not metadata:
+            return None
+        
+        # Platform-independent path handling
+        device = metadata['device']
+        is_windows_path = '\\' in device or (len(device) > 1 and device[1] == ':')
+        PathClass = PureWindowsPath if is_windows_path else PurePosixPath
+        root_path = PathClass(device) if device else caf_path.parent
+        
+        # Determine hash method from filename
+        name = caf_path.stem.lower()
+        if '_sha256' in name:
+            hash_method = 'SHA256'
+        elif '_sha1' in name:
+            hash_method = 'SHA1'
+        elif '_md5' in name or 'index' in name:
+            hash_method = 'MD5'
+        else:
+            hash_method = 'None'
+        
+        return IndexInfo(
+            path=caf_path,
+            root_path=root_path,
+            file_count=metadata['file_count'],
+            total_size=metadata['total_size'],
+            created_date=metadata['created_date'],
+            hash_method=hash_method
+        )
+    
+    def get_index_info_old(self, caf_path: Path) -> Optional[IndexInfo]:
         """Extract information about an index file by parsing the CAF header."""
         try:
             with caf_path.open('rb') as f:

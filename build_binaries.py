@@ -45,7 +45,7 @@ class BinaryBuilder:
     def setup_icons_dir(self):
         """Ensures the icons directory exists."""
         self.icons_dir.mkdir(exist_ok=True)
-        
+
     def build_windows_exe(self):
         """Build Windows executable."""
         if platform.system() != "Windows":
@@ -56,15 +56,16 @@ class BinaryBuilder:
         self.setup_icons_dir()
         icon_path = self.icons_dir / "app_icon.ico"
 
+        # Use python -m PyInstaller instead of pyinstaller directly
         cmd = [
-            "pyinstaller", "--onefile", "--windowed",
+            sys.executable, "-m", "PyInstaller", "--onefile", "--windowed",
             "--name", self.app_name.replace(" ", ""),
             "--paths", str(self.root_dir),
             "--hidden-import", "tkinter", "--hidden-import", "tkinter.ttk",
             "--hidden-import", "tkinter.filedialog", "--hidden-import", "tkinter.messagebox",
             "--clean", self.script_name
         ]
-        
+
         if icon_path.exists() and icon_path.stat().st_size > 0:
             cmd.extend(["--icon", str(icon_path)])
         else:
@@ -83,14 +84,15 @@ class BinaryBuilder:
         self.setup_icons_dir()
         icon_path = self.icons_dir / "app_icon.icns"
 
+        # Use python -m PyInstaller instead of pyinstaller directly
         cmd = [
-            "pyinstaller", "--onedir", "--windowed",
+            sys.executable, "-m", "PyInstaller", "--onedir", "--windowed",
             "--name", self.app_name,
             "--paths", str(self.root_dir),
             "--osx-bundle-identifier", "com.yourcompany.universalsearch",
             "--clean", self.script_name
         ]
-        
+
         if icon_path.exists() and icon_path.stat().st_size > 0:
             print(f"Using icon: {icon_path}")
             cmd.extend(["--icon", str(icon_path)])
@@ -110,8 +112,9 @@ class BinaryBuilder:
         self.setup_icons_dir()
         icon_path = self.icons_dir / "app_icon.png"
 
+        # Use python -m PyInstaller instead of pyinstaller directly
         cmd = [
-            "pyinstaller", "--onefile",
+            sys.executable, "-m", "PyInstaller", "--onefile",
             "--name", self.app_name.replace(" ", ""),
             "--paths", str(self.root_dir),
             "--clean", self.script_name
@@ -124,7 +127,7 @@ class BinaryBuilder:
 
         subprocess.run(cmd, check=True)
         self.create_linux_appimage()
-    
+
     # --- Installer Creation Methods (Restored) ---
 
     def create_macos_dmg(self):
@@ -133,7 +136,7 @@ class BinaryBuilder:
         try:
             dmg_name = f"{self.app_name.replace(' ', '')}-{self.version}.dmg"
             app_path = self.dist_dir / f"{self.app_name}.app"
-            
+
             if app_path.exists():
                 subprocess.run([
                     "hdiutil", "create", "-volname", self.app_name,
@@ -174,7 +177,7 @@ class BinaryBuilder:
         print("\n" + "="*50)
         print("DISTRIBUTION INFORMATION")
         print("="*50)
-        
+
         system = platform.system()
         if system == "Windows":
             print("Windows Distribution:")
