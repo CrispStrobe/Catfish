@@ -209,7 +209,8 @@ class IndexBrowserWindow:
         
         # Configure tag colors
         self.files_tree.tag_configure('missing', foreground='gray')
-        self.files_tree.tag_configure('exists', foreground='black')
+        # we may just use the system default which should adjust to light or dark mode
+        # self.files_tree.tag_configure('exists', foreground='black')
         
         self.status_var.set(f"Showing {len(entries_to_show):,} of {len(self.file_entries):,} files")
         
