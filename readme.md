@@ -1,6 +1,6 @@
-# File Search & Index Tool
+# CatFiSh - Catalog File Search
 
-A high-performance, cross-platform desktop application for indexing drives or folders, searching for files instantly, and finding duplicates. Built with Python and Tkinter, this tool is designed to be fast, efficient, and user-friendly, with both a complete GUI and a flexible command-line interface.
+A high-performance, cross-platform desktop application for indexing drives or folders, searching for files instantly, and finding duplicates. Built with Python and Tkinter, this tool is designed to be fast, efficient, and user-friendly, with both a complete GUI and a flexible command-line interface.    
 
 It creates and uses catalog files (`.caf`) that are backwards-compatible with the classic [Cathy](http://www.mtg.sk/rva/cathy/cathy.html) cataloging tool, while extending its functionality with modern hashing algorithms and features.
 
@@ -33,8 +33,8 @@ Download a pre-built executable for your operating system from the project's **[
 1.  **Clone the repository:**
 
     ```bash
-    git clone https://github.com/CrispStrobe/duplicate-finder.git
-    cd duplicate-finder
+    git clone https://github.com/CrispStrobe/Catfish.git
+    cd Catfish
     ```
 
 2.  **Create and activate a virtual environment (recommended):**
