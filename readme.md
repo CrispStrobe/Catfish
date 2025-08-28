@@ -183,6 +183,9 @@ duplicate-finder/
 
 -----
 
+## Acknowledgments
+Many thank to Robert Vašíček for the [awesome Cathy tool](http://rva.mtg.sk/) and to binsento42 for [the python recreation](https://github.com/binsento42/Cathy), which was very useful in building this.
+
 ## License
 
 This project is licensed under the **MIT License**. Use at your own risk. **Always back up important data** before performing file deletion operations.
