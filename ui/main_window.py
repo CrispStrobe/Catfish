@@ -7,12 +7,13 @@ from pathlib import Path
 from typing import List, Optional, Set, Dict
 import re
 from datetime import datetime as dt
+import sys
 
 # Import all required modules with absolute imports
 from core.config import Config
 from core.index_discovery import IndexDiscovery
 from core.data_structures import SearchCriteria, SearchResult, ScanConfig
-from core.search_logic import search_files_in_index
+from core.search_logic import search_files_in_index, _safe_compile_pattern
 from core.file_index import FileIndex
 from core.scan_operations import run_scan_with_progress_enhanced, run_scan_with_progress
 from utils.i18n import translator as t
@@ -1317,12 +1318,15 @@ class UniversalSearchApp:
         """Search files in an index with optimized progress reporting."""
         results = []
         
-        # Compile regex pattern if provided
+        # FIX: Use safe compile pattern to handle globs (e.g. *test*) vs Regex
         name_regex = None
         if criteria.name_pattern:
             try:
-                name_regex = re.compile(criteria.name_pattern, re.IGNORECASE)
-            except re.error as e:
+                print(f"[DEBUG-GUI] Compiling pattern: {criteria.name_pattern}", file=sys.stderr)
+                name_regex = _safe_compile_pattern(criteria.name_pattern)
+            except ValueError as e:
+                # If it fails even after safe compile attempts, verify if it's a critical error
+                print(f"[DEBUG-GUI] Pattern compile failed: {e}", file=sys.stderr)
                 raise ValueError(t.get('invalid_regex', e))
         
         # Pre-filter size buckets for better performance
