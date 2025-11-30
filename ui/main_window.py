@@ -53,6 +53,9 @@ class UniversalSearchApp:
         self.available_indices = []
         self.search_results = []
         
+        # --- CACHE: Store loaded index objects here ---
+        self.index_cache = {} 
+        
         # Duplicate scan variables
         self.dup_source_path = None
         self.dup_dest_paths = []
@@ -795,8 +798,12 @@ class UniversalSearchApp:
         )
     
     def load_index_for_search(self, caf_path: Path):
-        """Load an index file for searching with verbose logging."""
-        print(f"[LOAD] Loading index: {caf_path}")
+        """Load an index file for searching with caching."""
+        # 1. Check Cache
+        if caf_path in self.index_cache:
+            return self.index_cache[caf_path]
+
+        print(f"[LOAD] Loading index from disk: {caf_path}", file=sys.stderr)
         
         # Determine hash algorithm from filename
         name = caf_path.stem.lower()
@@ -808,25 +815,15 @@ class UniversalSearchApp:
         else:
             hash_algo = 'md5'
         
-        print(f"[LOAD] Using hash algorithm: {hash_algo}")
-        
+        # 2. Load from disk
         file_index = FileIndex.load_from_caf(caf_path, use_hash, hash_algo)
         
         if file_index:
-            print(f"[LOAD] Successfully loaded index with {file_index.total_files} files")
-            print(f"[LOAD] Size index has {len(file_index.size_index)} buckets")
-            
-            # Log some sample data
-            sample_count = 0
-            for size, entries in file_index.size_index.items():
-                if sample_count < 3:  # Show first 3 size buckets
-                    print(f"[LOAD] Size bucket {size}: {len(entries)} files")
-                    if entries and sample_count == 0:  # Show one file from first bucket
-                        sample_file = entries[0]
-                        print(f"[LOAD] Sample file: {sample_file.path.name} ({sample_file.size} bytes)")
-                    sample_count += 1
+            # 3. Save to Cache
+            self.index_cache[caf_path] = file_index
+            print(f"[LOAD] Cached index with {file_index.total_files} files", file=sys.stderr)
         else:
-            print(f"[LOAD] Failed to load index: {caf_path}")
+            print(f"[LOAD] Failed to load index: {caf_path}", file=sys.stderr)
         
         return file_index
     
@@ -1204,9 +1201,9 @@ class UniversalSearchApp:
     
     def run_search_with_progress(self, criteria: SearchCriteria, active_indices: List[Path]):
         """Run search with enhanced progress window and error recovery."""
-        
         from threading import Thread
         import queue
+        import time
         
         progress_window = ProgressWindow(self.root, "Searching Files")
         search_results = []
@@ -1215,119 +1212,121 @@ class UniversalSearchApp:
         progress_queue = queue.Queue()
         
         def update_progress_from_queue():
-            """Safely updates GUI from main thread by checking the queue"""
             try:
                 while True:
+                    # Expect 4-tuple: (msg_type, op, details, data)
                     message_type, operation, details, data = progress_queue.get_nowait()
                     if message_type == "progress":
                         progress_window.update_operation(operation)
                         progress_window.update_details(details)
                     elif message_type == "result":
-                        # Add search result to tree with index name
-                        result, index_name = data
-                        self.add_search_result_to_tree(result, index_name)
+                        # data is (result, index_name)
+                        self.add_search_result_to_tree(data[0], data[1])
                     elif message_type == "error":
                         messagebox.showerror(t.get('error'), t.get('search_error', details))
                     elif message_type == "complete":
-                        total_results = data
-                        self.status_var.set(t.get('found_status', total_results))
+                        self.status_var.set(t.get('found_status', data))
                         progress_window.root.quit()
                         return
             except queue.Empty:
                 pass
             
-            # Reschedule this check if thread is still running
             if search_thread_obj.is_alive():
-                progress_window.root.after(50, update_progress_from_queue)  # More frequent updates
+                progress_window.root.after(50, update_progress_from_queue)
         
-        def progress_callback(operation, details):
-            """Thread-safe progress callback"""
+        # Generic callback for text updates
+        def gui_msg_callback(operation, details):
             progress_queue.put(("progress", operation, details, None))
         
-        def result_callback(result, index_name):
-            """Thread-safe result callback with index name"""
+        # Callback for search result
+        def gui_result_callback(result, index_name):
             progress_queue.put(("result", "", "", (result, index_name)))
-        
+            
         def search_thread():
-            """Background search thread with better error handling"""
             try:
                 total_results = 0
-                
-                progress_callback("Initializing search", f"Preparing to search {len(active_indices)} active indices")
+                gui_msg_callback("Initializing search", f"Preparing to search {len(active_indices)} active indices")
                 
                 for i, caf_path in enumerate(active_indices):
-                    if progress_window.cancelled.is_set():
-                        break
-                        
-                    if not caf_path.exists():
-                        progress_callback(f"Skipping index {i+1}/{len(active_indices)}", f"File not found: {caf_path.name}")
-                        continue
+                    if progress_window.cancelled.is_set(): break
                     
-                    # Extract index name
-                    try:
-                        index_name = caf_path.name
-                        if index_name.lower().endswith('.caf'):
-                            index_name = index_name[:-4]
-                        if '_index' in index_name:
-                            index_name = index_name.replace('_index', '')
-                    except:
-                        index_name = "Unknown"
-                    
-                    progress_callback(f"Loading index {i+1}/{len(active_indices)}", f"Reading: {caf_path.name}")
-                    
-                    # Load index with timeout protection
+                    # 1. Load Index
+                    gui_msg_callback(f"Loading index {i+1}/{len(active_indices)}", f"Reading: {caf_path.name}")
                     file_index = self.load_index_for_search(caf_path)
+                    
                     if not file_index:
-                        progress_callback(f"Skipping index {i+1}/{len(active_indices)}", f"Failed to load: {caf_path.name}")
                         continue
                     
-                    progress_callback(f"Searching index {i+1}/{len(active_indices)}", f"Loaded: {caf_path.name} ({file_index.total_files:,} files)")
+                    index_name = caf_path.stem.replace('_index', '')
                     
-                    # Search in this index with progress
-                    results = self.search_files_in_index_with_progress(
-                        file_index, criteria, progress_callback, result_callback, 
-                        progress_window.cancelled, index_name
+                    # 2. Define Progress Adapter
+                    # Adapts (current, total, speed) -> GUI text
+                    def specific_search_progress(current, total, speed):
+                        pct = int((current / total) * 100) if total > 0 else 0
+                        msg = f"Scanning {current:,}/{total:,} ({pct}%)"
+                        if speed > 0: msg += f" @ {int(speed):,} items/s"
+                        gui_msg_callback(f"Searching {index_name}", msg)
+
+                    # 3. Call CORE Search Logic
+                    results = search_files_in_index(
+                        file_index, 
+                        criteria, 
+                        progress_callback=specific_search_progress
                     )
-                    total_results += len(results)
                     
-                    if progress_window.cancelled.is_set():
-                        break
+                    # 4. Process Results
+                    for res in results:
+                        gui_result_callback(res, index_name)
+                    total_results += len(results)
                 
-                # Complete
                 progress_queue.put(("complete", "", "", total_results))
                 
             except Exception as e:
                 progress_queue.put(("error", "Error", str(e), None))
         
-        # Start search in background thread
         search_thread_obj = Thread(target=search_thread)
         search_thread_obj.daemon = True
         search_thread_obj.start()
         
-        # Start queue polling from main thread with higher frequency
         progress_window.root.after(50, update_progress_from_queue)
-        
-        # Run progress GUI
         progress_window.root.mainloop()
         progress_window.root.destroy()
         
-        # Wait for thread to complete
         search_thread_obj.join(timeout=1.0)
 
     def search_files_in_index_with_progress(self, file_index, criteria, progress_callback, result_callback, cancel_event, index_name):
-        """Search files in an index with optimized progress reporting."""
+        """Search files in an index with optimized string matching and progress reporting."""
         results = []
         
-        # FIX: Use safe compile pattern to handle globs (e.g. *test*) vs Regex
+        # --- OPTIMIZATION: Detect simple glob patterns to avoid Regex overhead ---
         name_regex = None
+        simple_query = None
+        query_type = None # 'contains', 'startswith', 'endswith', 'exact'
+
         if criteria.name_pattern:
-            try:
-                print(f"[DEBUG-GUI] Compiling pattern: {criteria.name_pattern}", file=sys.stderr)
-                name_regex = _safe_compile_pattern(criteria.name_pattern)
-            except ValueError as e:
-                # If it fails even after safe compile attempts, verify if it's a critical error
-                print(f"[DEBUG-GUI] Pattern compile failed: {e}", file=sys.stderr)
-                raise ValueError(t.get('invalid_regex', e))
+            pat = criteria.name_pattern
+            # Check for simple wildcards without internal wildcards
+            if '*' in pat or '?' in pat:
+                is_start_star = pat.startswith('*')
+                is_end_star = pat.endswith('*')
+                clean_pat = pat.strip('*')
+                
+                # Verify no internal wildcards (e.g. "te*xt")
+                if '*' not in clean_pat and '?' not in clean_pat:
+                    simple_query = clean_pat.lower()
+                    if is_start_star and is_end_star:
+                        query_type = 'contains'
+                    elif is_start_star:
+                        query_type = 'endswith'
+                    elif is_end_star:
+                        query_type = 'startswith'
+            
+            # If not optimized, fall back to Regex
+            if not simple_query:
+                try:
+                    name_regex = _safe_compile_pattern(criteria.name_pattern)
+                except ValueError as e:
+                    raise ValueError(t.get('invalid_regex', e))
         
         # Pre-filter size buckets for better performance
         relevant_sizes = []
@@ -1343,10 +1342,7 @@ class UniversalSearchApp:
             total_entries += len(file_index.size_index[size])
         
         if total_entries == 0:
-            progress_callback("Search complete", f"No files match size criteria in {index_name}")
             return results
-        
-        progress_callback("Searching files", f"Scanning {total_entries:,} relevant files in {index_name}")
         
         processed = 0
         last_progress_update = 0
@@ -1364,40 +1360,38 @@ class UniversalSearchApp:
                     
                 processed += 1
                 
-                # More frequent progress updates (every 500 files or 2% progress)
-                progress_threshold = min(500, max(100, total_entries // 50))
-                if processed - last_progress_update >= progress_threshold:
+                # Progress updates (every 2000 files to reduce GUI overhead)
+                if processed - last_progress_update >= 2000:
                     progress_percentage = (processed / total_entries) * 100
                     progress_callback(f"Searching {index_name}", 
-                                f"Processed {processed:,}/{total_entries:,} files ({progress_percentage:.1f}%) - {len(results)} matches")
+                                f"Scanned {processed:,}/{total_entries:,} ({progress_percentage:.0f}%)")
                     last_progress_update = processed
                 
-                # Name filtering
-                if name_regex and not name_regex.search(entry.path.name):
-                    continue
+                # --- OPTIMIZED NAME MATCHING ---
+                if simple_query:
+                    # Fast string matching (Case insensitive)
+                    name_lower = entry.path.name.lower()
+                    if query_type == 'contains':
+                        if simple_query not in name_lower: continue
+                    elif query_type == 'endswith':
+                        if not name_lower.endswith(simple_query): continue
+                    elif query_type == 'startswith':
+                        if not name_lower.startswith(simple_query): continue
+                elif name_regex:
+                    # Slow Regex matching
+                    if not name_regex.search(entry.path.name): continue
+                # -------------------------------
                 
                 # Date filtering  
                 if criteria.date_min or criteria.date_max:
                     file_mtime = dt.fromtimestamp(entry.mtime)
-                    
-                    if criteria.date_min and file_mtime < criteria.date_min:
-                        continue
-                    if criteria.date_max and file_mtime > criteria.date_max:
-                        continue
+                    if criteria.date_min and file_mtime < criteria.date_min: continue
+                    if criteria.date_max and file_mtime > criteria.date_max: continue
                 
                 # File passed all criteria
-                result = SearchResult(
-                    path=entry.path,
-                    size=entry.size,
-                    mtime=entry.mtime,
-                    hash=entry.hash
-                )
+                result = SearchResult(entry.path, entry.size, entry.mtime, entry.hash)
                 results.append(result)
                 result_callback(result, index_name)
-        
-        # Final progress update
-        if not cancel_event or not cancel_event.is_set():
-            progress_callback(f"Completed {index_name}", f"Found {len(results)} matches out of {processed:,} files scanned")
         
         return results
     
