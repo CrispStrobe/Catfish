@@ -5,3 +5,4 @@ dist/*
 !dist/*.dmg
 !dist/*.exe
 build/*
+venv/*
