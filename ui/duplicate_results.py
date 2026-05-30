@@ -9,11 +9,12 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from core.data_structures import DuplicateMatch
-from utils.file_utils import escape_script_path, format_size, get_default_script_name, get_platform_info
+from utils.file_utils import escape_script_path, format_size, get_default_script_name
 from utils.i18n import translator as t
 from utils.platform_utils import (
     FileOperationError,
     calculate_window_geometry,
+    get_platform_info,
     get_screen_geometry,
     make_script_executable,
     open_file_or_folder,

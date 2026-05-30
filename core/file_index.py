@@ -89,8 +89,8 @@ class FileIndex:
         self.suffix_index = sorted([(e.path.name.lower()[::-1], e) for e in self.all_files], key=lambda x: x[0])
 
         self.is_optimized = True
-        dt = time.time() - t0
-        print(f" Done in {dt:.2f}s")
+        elapsed = time.time() - t0
+        print(f" Done in {elapsed:.2f}s")
 
     def _write_caf(self, caf_path, elm, info):
         with caf_path.open("wb") as buffer:
@@ -233,17 +233,6 @@ class FileIndex:
         if not self.all_files and self.size_index:
             self.all_files = [entry for bucket in self.size_index.values() for entry in bucket]
 
-    @staticmethod
-    def _read_caf_string_fast(buffer) -> str:
-        """Fast string reading like original Cathy - latin-1 for speed."""
-        chars = bytearray()
-        while True:
-            char = buffer.read(1)
-            if not char or char == b"\x00":
-                break
-            chars.extend(char)
-        return chars.decode("latin-1", errors="replace")
-
     @classmethod
     def load_metadata_only(cls, caf_path: Path) -> Optional[dict]:
         """Fast metadata extraction without loading file entries."""
@@ -262,11 +251,11 @@ class FileIndex:
 
                 # Quick header parsing
                 created_timestamp = struct.unpack("<L", buffer.read(4))[0]
-                device = cls._read_caf_string_fast(buffer) if version >= 2 else ""
-                volume = cls._read_caf_string_fast(buffer)
-                cls._read_caf_string_fast(buffer)
+                device = cls._read_string(buffer) if version >= 2 else ""
+                volume = cls._read_string(buffer)
+                cls._read_string(buffer)
                 buffer.read(4)  # serial
-                cls._read_caf_string_fast(buffer) if version >= 4 else ""
+                cls._read_string(buffer) if version >= 4 else ""
                 freesize = struct.unpack("<f", buffer.read(4))[0] if version >= 1 else 0
                 archive = struct.unpack("<h", buffer.read(2))[0] if version >= 6 else 0
 
@@ -276,7 +265,7 @@ class FileIndex:
                 total_size = 0
 
                 if dir_count > 0:
-                    cls._read_caf_string_fast(buffer)  # Skip root dir name
+                    cls._read_string(buffer)  # Skip root dir name
                     file_count = struct.unpack("<l", buffer.read(4))[0]
                     total_size = int(struct.unpack("<d", buffer.read(8))[0])
 
