@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `pyproject.toml` for modern Python packaging (replaces `setup.py` as the authoritative config)
-- 118 unit and integration tests covering core/, utils/, CLI, and index discovery
+- 132 unit and integration tests covering core/, utils/, CLI, index discovery, and scan operations
 - GitHub Actions CI workflow: lint (ruff + bandit) + test matrix (3 OSes x 3 Python versions)
 - GitHub Actions release workflow: test + build cross-platform binaries + create GitHub Release
 - MIT `LICENSE` file
@@ -28,22 +28,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `get_platform_info` imported from wrong module in `duplicate_results.py`
 - `dt` variable shadowing `datetime` import in `build_optimized_indices`
 - Releases page link in readme pointing to a Google search instead of GitHub
+- Diagnostic `print()` calls in `file_index.py` polluting stdout (moved to stderr), which broke JSON CLI output
 
 ### Removed
-- ~540 lines of dead/legacy code:
+- ~760 lines of dead/legacy code:
   - `load_from_caf_old`, `_ensure_indexes_built`, `_ensure_indexes_built_really`
   - `_find_name_duplicates_optimized`, `_read_caf_string_fast` (duplicate of `_read_string`)
   - `perform_search_old`, `search_files_in_index_with_progress`
-  - `find_duplicates_with_locations_legacy`, `get_index_info_old`
+  - `find_duplicates_with_locations_legacy`, `get_index_info_old`, `_read_caf_string` (on IndexDiscovery)
   - `clear_duplicate_form`, `add_dup_dest_folder`, `remove_dup_dest_folder`, `clear_dup_dest_folders`
   - Duplicate `_find_hash_duplicates_optimized` method
-  - Duplicate `build_destination_index_selective` in `search_logic.py`
+  - `find_potential_duplicates_optimized` (merged into `find_potential_duplicates`)
+  - `build_destination_index_selective` (consolidated into `build_destination_index`)
+  - Dead `hasattr(self, "raw_elm")` branches and `_get_or_build_dir_map`
 - Redundant `setup.py` configuration (reduced to minimal shim)
+- Duplicate `run_scan_with_progress_enhanced` (now alias of `run_scan_with_progress`)
 
 ### Changed
 - Minimum Python version bumped from 3.8 to 3.9
 - Package name changed from `file-search` to `catfish-search`
 - Version bumped from 1.0.0 to 1.1.0
+- `scan_operations.py` reduced from 228 to 76 lines by reusing `search_logic.build_destination_index`
 
 ## [1.0.0] - 2025
 

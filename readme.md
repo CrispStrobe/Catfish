@@ -219,7 +219,7 @@ Catfish/
 │   ├── file_utils.py      # Hashing, size/date parsing, path utilities
 │   ├── platform_utils.py  # OS-specific file opening & script generation
 │   └── i18n.py            # Internationalization (EN/DE)
-├── tests/                 # Test suite (105 tests)
+├── tests/                 # Test suite (132 tests)
 ├── .github/workflows/     # CI and release automation
 ├── main.py                # Entry point (GUI and CLI)
 ├── pyproject.toml         # Package configuration & tool settings
