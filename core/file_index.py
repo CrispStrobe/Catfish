@@ -294,38 +294,28 @@ class FileIndex:
     ) -> list[DuplicateMatch]:
         """
         Bulk duplicate detection optimized for scanning operations.
-        Groups source files by size to skip sizes with no destination matches.
+        Uses source_index.size_index to skip sizes with no destination matches,
+        avoiding a redundant filesystem rescan.
         """
         duplicates: list[DuplicateMatch] = []
-
-        # Group source files by size for efficient matching
-        source_files_by_size: dict[int, list[Path]] = defaultdict(list)
-        for file_path in source_index.root_path.rglob("*"):
-            if file_path.is_file():
-                try:
-                    size = file_path.stat().st_size
-                    source_files_by_size[size].append(file_path)
-                except OSError:
-                    continue
-
-        total_files = sum(len(files) for files in source_files_by_size.values())
         processed = 0
+        total_files = source_index.total_files
 
-        for size, source_files in source_files_by_size.items():
+        for size, source_entries in source_index.size_index.items():
             if cancel_event and cancel_event.is_set():
                 break
 
-            if progress_callback:
-                progress_callback(
-                    "Finding duplicates", f"Processing {len(source_files)} files of size {format_size(size)}"
-                )
-
             # Skip sizes with no destination matches
             if size not in dest_index.size_index:
-                processed += len(source_files)
+                processed += len(source_entries)
                 continue
 
-            for source_file in source_files:
+            if progress_callback:
+                progress_callback(
+                    "Finding duplicates", f"Processing {len(source_entries)} files of size {format_size(size)}"
+                )
+
+            for entry in source_entries:
                 if cancel_event and cancel_event.is_set():
                     break
 
@@ -336,9 +326,9 @@ class FileIndex:
                         f"Checked {processed}/{total_files} files ({len(duplicates)} duplicates found)",
                     )
 
-                matches = dest_index.find_potential_duplicates(source_file)
+                matches = dest_index.find_potential_duplicates(entry.path)
                 if matches:
-                    duplicates.append(DuplicateMatch(source_file=source_file, destinations=matches))
+                    duplicates.append(DuplicateMatch(source_file=entry.path, destinations=matches))
 
         return duplicates
 

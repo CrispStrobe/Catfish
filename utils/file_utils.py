@@ -160,17 +160,3 @@ def get_default_script_name() -> str:
 def escape_script_path(path: Path) -> str:
     """Escapes a file path for use in a shell/batch script."""
     return get_platform_info()["path_quote"](path)
-
-
-def get_display_path(file_path: Path) -> str:
-    """Get a user-friendly display path, showing relative to home if possible."""
-    try:
-        # Use str() for comparison to handle PurePath objects correctly
-        home_path_str = str(Path.home())
-        file_path_str = str(file_path)
-        if file_path_str.startswith(home_path_str):
-            # Recreate path object to use relative_to
-            return "~/" + str(Path(file_path).relative_to(Path.home()))
-        return file_path_str
-    except (ValueError, OSError):
-        return str(file_path)

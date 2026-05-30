@@ -14,12 +14,21 @@ import sys
 from pathlib import Path
 
 
+def _read_version() -> str:
+    """Read version from __init__.py."""
+    init_path = Path(__file__).parent / "__init__.py"
+    for line in init_path.read_text().splitlines():
+        if line.startswith("__version__"):
+            return line.split('"')[1]
+    return "0.0.0"
+
+
 class BinaryBuilder:
     def __init__(self):
         self.root_dir = Path(__file__).parent
         self.script_name = "main.py"
-        self.app_name = "Universal File Search"
-        self.version = "1.0.0"
+        self.app_name = "CatfishSearch"
+        self.version = _read_version()
         self.build_dir = self.root_dir / "build"
         self.dist_dir = self.root_dir / "dist"
         self.icons_dir = self.root_dir / "icons"
@@ -64,7 +73,7 @@ class BinaryBuilder:
             "--onefile",
             "--windowed",
             "--name",
-            self.app_name.replace(" ", ""),
+            self.app_name,
             "--paths",
             str(self.root_dir),
             "--hidden-import",
@@ -109,7 +118,7 @@ class BinaryBuilder:
             "--paths",
             str(self.root_dir),
             "--osx-bundle-identifier",
-            "com.yourcompany.universalsearch",
+            "com.crispstrobe.catfishsearch",
             "--clean",
             self.script_name,
         ]
@@ -140,7 +149,7 @@ class BinaryBuilder:
             "PyInstaller",
             "--onefile",
             "--name",
-            self.app_name.replace(" ", ""),
+            self.app_name,
             "--paths",
             str(self.root_dir),
             "--clean",
