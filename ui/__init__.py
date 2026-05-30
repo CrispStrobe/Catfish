@@ -1,2 +1,2 @@
-# ui/__init__.py  
+# ui/__init__.py
 """User interface components."""

@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "catfish-search"
+version = "1.1.0"
+description = "File Search and Index Tool with duplicate detection"
+readme = "readme.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    {name = "CrispStrobe"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Filesystems",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "tqdm>=4.64.0",
+]
+
+[project.scripts]
+catfish-search = "main:main"
+
+[project.urls]
+Homepage = "https://github.com/CrispStrobe/Catfish"
+Repository = "https://github.com/CrispStrobe/Catfish"
+
+[tool.setuptools.packages.find]
+include = ["core*", "ui*", "utils*"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "S",      # flake8-bandit
+    "UP",     # pyupgrade
+    "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "S603",   # subprocess call with non-constant arguments (needed for cross-platform)
+    "S606",   # starting a process without a shell (os.startfile is Windows-only, safe)
+    "S607",   # partial executable path (needed for cross-platform)
+    "S605",   # starting a process with a shell
+    "S602",   # subprocess call with shell=True
+    "S112",   # try-except-continue (used in discovery for robustness)
+    "SIM108", # ternary operator (buffer.read side effects make ternary confusing)
+    "SIM102", # nested if (readability preference)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S108", "S324"]  # allow assert, tmp paths, md5 in tests
+"build_binaries.py" = ["S603", "S607"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: marks tests that perform real file I/O (deselect with '-m \"not live\"')",
+]

@@ -7,12 +7,12 @@ Cross-platform binary builder for Universal File Search Tool
 Builds executables for Windows, macOS, and creates installable packages
 """
 
-import os
-import sys
+import platform
 import shutil
 import subprocess
-import platform
+import sys
 from pathlib import Path
+
 
 class BinaryBuilder:
     def __init__(self):
@@ -37,10 +37,10 @@ class BinaryBuilder:
     def install_dependencies(self):
         """Install required dependencies."""
         print("Installing build dependencies...")
-        subprocess.run([
-            sys.executable, "-m", "pip", "install", "--upgrade",
-            "pyinstaller", "setuptools", "wheel", "Pillow"
-        ], check=True)
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "pyinstaller", "setuptools", "wheel", "Pillow"],
+            check=True,
+        )
 
     def setup_icons_dir(self):
         """Ensures the icons directory exists."""
@@ -58,12 +58,25 @@ class BinaryBuilder:
 
         # Use python -m PyInstaller instead of pyinstaller directly
         cmd = [
-            sys.executable, "-m", "PyInstaller", "--onefile", "--windowed",
-            "--name", self.app_name.replace(" ", ""),
-            "--paths", str(self.root_dir),
-            "--hidden-import", "tkinter", "--hidden-import", "tkinter.ttk",
-            "--hidden-import", "tkinter.filedialog", "--hidden-import", "tkinter.messagebox",
-            "--clean", self.script_name
+            sys.executable,
+            "-m",
+            "PyInstaller",
+            "--onefile",
+            "--windowed",
+            "--name",
+            self.app_name.replace(" ", ""),
+            "--paths",
+            str(self.root_dir),
+            "--hidden-import",
+            "tkinter",
+            "--hidden-import",
+            "tkinter.ttk",
+            "--hidden-import",
+            "tkinter.filedialog",
+            "--hidden-import",
+            "tkinter.messagebox",
+            "--clean",
+            self.script_name,
         ]
 
         if icon_path.exists() and icon_path.stat().st_size > 0:
@@ -86,11 +99,19 @@ class BinaryBuilder:
 
         # Use python -m PyInstaller instead of pyinstaller directly
         cmd = [
-            sys.executable, "-m", "PyInstaller", "--onedir", "--windowed",
-            "--name", self.app_name,
-            "--paths", str(self.root_dir),
-            "--osx-bundle-identifier", "com.yourcompany.universalsearch",
-            "--clean", self.script_name
+            sys.executable,
+            "-m",
+            "PyInstaller",
+            "--onedir",
+            "--windowed",
+            "--name",
+            self.app_name,
+            "--paths",
+            str(self.root_dir),
+            "--osx-bundle-identifier",
+            "com.yourcompany.universalsearch",
+            "--clean",
+            self.script_name,
         ]
 
         if icon_path.exists() and icon_path.stat().st_size > 0:
@@ -114,10 +135,16 @@ class BinaryBuilder:
 
         # Use python -m PyInstaller instead of pyinstaller directly
         cmd = [
-            sys.executable, "-m", "PyInstaller", "--onefile",
-            "--name", self.app_name.replace(" ", ""),
-            "--paths", str(self.root_dir),
-            "--clean", self.script_name
+            sys.executable,
+            "-m",
+            "PyInstaller",
+            "--onefile",
+            "--name",
+            self.app_name.replace(" ", ""),
+            "--paths",
+            str(self.root_dir),
+            "--clean",
+            self.script_name,
         ]
 
         if icon_path.exists() and icon_path.stat().st_size > 0:
@@ -138,12 +165,21 @@ class BinaryBuilder:
             app_path = self.dist_dir / f"{self.app_name}.app"
 
             if app_path.exists():
-                subprocess.run([
-                    "hdiutil", "create", "-volname", self.app_name,
-                    "-srcfolder", str(app_path),
-                    "-ov", "-format", "UDZO",
-                    str(self.dist_dir / dmg_name)
-                ], check=True)
+                subprocess.run(
+                    [
+                        "hdiutil",
+                        "create",
+                        "-volname",
+                        self.app_name,
+                        "-srcfolder",
+                        str(app_path),
+                        "-ov",
+                        "-format",
+                        "UDZO",
+                        str(self.dist_dir / dmg_name),
+                    ],
+                    check=True,
+                )
                 print(f"macOS DMG created: {dmg_name}")
             else:
                 print("App bundle not found - DMG not created")
@@ -165,18 +201,23 @@ class BinaryBuilder:
         self.install_dependencies()
         system = platform.system()
         print(f"\nBuilding for {system}...")
-        if system == "Windows": self.build_windows_exe()
-        elif system == "Darwin": self.build_macos_app()
-        elif system == "Linux": self.build_linux_appimage()
-        else: print(f"Unsupported platform: {system}"); return
-        print(f"\nBuild completed! Check the 'dist' directory for your application.")
+        if system == "Windows":
+            self.build_windows_exe()
+        elif system == "Darwin":
+            self.build_macos_app()
+        elif system == "Linux":
+            self.build_linux_appimage()
+        else:
+            print(f"Unsupported platform: {system}")
+            return
+        print("\nBuild completed! Check the 'dist' directory for your application.")
         self.print_distribution_info()
 
     def print_distribution_info(self):
         """Prints final information about the created files."""
-        print("\n" + "="*50)
+        print("\n" + "=" * 50)
         print("DISTRIBUTION INFORMATION")
-        print("="*50)
+        print("=" * 50)
 
         system = platform.system()
         if system == "Windows":
@@ -189,6 +230,7 @@ class BinaryBuilder:
         elif system == "Linux":
             print("Linux Distribution:")
             print(f"- Executable: dist/{self.app_name.replace(' ', '')}")
+
 
 if __name__ == "__main__":
     builder = BinaryBuilder()

@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install pytest pytest-cov ruff bandit
+          pip install -e .
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest tests/ -v --tb=short
+
+  build:
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: CatfishSearch-linux
+          - os: macos-latest
+            artifact_name: CatfishSearch-macos
+          - os: windows-latest
+            artifact_name: CatfishSearch-windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          pip install pyinstaller Pillow
+          pip install -e .
+
+      - name: Build executable
+        run: |
+          python -m PyInstaller --onefile --name CatfishSearch --paths . --clean main.py
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/CatfishSearch*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          # Linux
+          if [ -f artifacts/CatfishSearch-linux/CatfishSearch ]; then
+            chmod +x artifacts/CatfishSearch-linux/CatfishSearch
+            tar czf release/CatfishSearch-linux-amd64.tar.gz -C artifacts/CatfishSearch-linux CatfishSearch
+          fi
+          # macOS
+          if [ -f artifacts/CatfishSearch-macos/CatfishSearch ]; then
+            tar czf release/CatfishSearch-macos-amd64.tar.gz -C artifacts/CatfishSearch-macos CatfishSearch
+          fi
+          # Windows
+          if [ -f artifacts/CatfishSearch-windows/CatfishSearch.exe ]; then
+            cd artifacts/CatfishSearch-windows && zip ../../release/CatfishSearch-windows-amd64.zip CatfishSearch.exe && cd ../..
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*
