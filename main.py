@@ -318,7 +318,7 @@ def run_dupes_cli(args):
             for match in duplicates:
                 print(f"\n[Source] {match.source_file}")
                 for dest_entry in match.destinations:
-                    print(f"  └─ Dupe: {dest_entry.path}")
+                    print(f"  -> Dupe: {dest_entry.path}")
 
     except Exception as e:
         print(f"\nAn error occurred during the scan: {e}", file=sys.stderr)
