@@ -1,10 +1,10 @@
-"""Tests for core/scan_operations.py"""
+"""Tests for core/search_logic.build_destination_index"""
 
 from core.data_structures import ScanConfig
-from core.scan_operations import build_destination_index_selective
+from core.search_logic import build_destination_index
 
 
-class TestBuildDestinationIndexSelective:
+class TestBuildDestinationIndex:
     def _make_tree(self, root, files):
         root.mkdir(exist_ok=True)
         for name, content in files.items():
@@ -28,7 +28,7 @@ class TestBuildDestinationIndexSelective:
             recreate_indices=False,
         )
 
-        index = build_destination_index_selective(config)
+        index = build_destination_index(config)
         assert index is not None
         assert index.total_files == 2
 
@@ -47,7 +47,7 @@ class TestBuildDestinationIndexSelective:
             recreate_indices=False,
         )
 
-        index = build_destination_index_selective(config)
+        index = build_destination_index(config)
         assert index is not None
         assert index.total_files == 3
 
@@ -65,7 +65,7 @@ class TestBuildDestinationIndexSelective:
         )
 
         # First call: creates CAF
-        index1 = build_destination_index_selective(config)
+        index1 = build_destination_index(config)
         assert index1 is not None
         assert index1.total_files == 1
 
@@ -76,7 +76,7 @@ class TestBuildDestinationIndexSelective:
         assert caf.exists()
 
         # Second call: should reuse CAF
-        index2 = build_destination_index_selective(config)
+        index2 = build_destination_index(config)
         assert index2 is not None
         assert index2.total_files == 1
 
@@ -93,7 +93,7 @@ class TestBuildDestinationIndexSelective:
             recreate_indices=False,
         )
 
-        index = build_destination_index_selective(config)
+        index = build_destination_index(config)
         assert index is not None
         assert index.total_files == 1
 
@@ -110,7 +110,7 @@ class TestBuildDestinationIndexSelective:
             recreate_indices=False,
         )
 
-        index = build_destination_index_selective(config)
+        index = build_destination_index(config)
         assert index is not None
         assert index.total_files == 1
 
@@ -132,7 +132,7 @@ class TestBuildDestinationIndexSelective:
         def cb(operation, details):
             calls.append((operation, details))
 
-        build_destination_index_selective(config, progress_callback=cb)
+        build_destination_index(config, progress_callback=cb)
         assert len(calls) > 0
 
     def test_cancel_event_stops_scan(self, tmp_path):
@@ -153,7 +153,7 @@ class TestBuildDestinationIndexSelective:
         cancel = Event()
         cancel.set()  # Cancel immediately
 
-        index = build_destination_index_selective(config, cancel_event=cancel)
+        index = build_destination_index(config, cancel_event=cancel)
         # Should return early with 0 files since cancel was set before scanning
         assert index is not None
         assert index.total_files == 0

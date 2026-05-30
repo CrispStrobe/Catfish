@@ -4,6 +4,7 @@
 
 import stat
 import struct
+import sys
 import time
 from collections import defaultdict
 from datetime import datetime as dt
@@ -78,7 +79,12 @@ class FileIndex:
         if not self.all_files:
             return
 
-        print(f"[INDEX] Optimization: Sorting {len(self.all_files)} items for Binary Search...", end="", flush=True)
+        print(
+            f"[INDEX] Optimization: Sorting {len(self.all_files)} items for Binary Search...",
+            end="",
+            flush=True,
+            file=sys.stderr,
+        )
         t0 = time.time()
 
         # 1. Prefix Index: Sort by lowercase name for 'start*' queries
@@ -90,7 +96,7 @@ class FileIndex:
 
         self.is_optimized = True
         elapsed = time.time() - t0
-        print(f" Done in {elapsed:.2f}s")
+        print(f" Done in {elapsed:.2f}s", file=sys.stderr)
 
     def _write_caf(self, caf_path, elm, info):
         with caf_path.open("wb") as buffer:
@@ -225,7 +231,7 @@ class FileIndex:
                 return index
 
             except Exception as e:
-                print(f"[CAF] Error: {e}")
+                print(f"[CAF] Error: {e}", file=sys.stderr)
                 return None
 
     def _flatten_index(self):
@@ -282,111 +288,29 @@ class FileIndex:
             except (struct.error, OSError, IndexError):
                 return None
 
-    def find_potential_duplicates_optimized(self, file_path: Path) -> list[FileEntry]:
-        try:
-            stat_info = file_path.stat()
-            file_size = stat_info.st_size
-        except OSError:
-            return []
-
-        # O(1) lookup in size_index
-        if file_size not in self.size_index:
-            return []
-
-        if self.use_hash:
-            return self._find_hash_duplicates_optimized(file_path, file_size)
-        else:
-            return [e for e in self.size_index[file_size] if e.path.name == file_path.name]
-
-    def _find_hash_duplicates_optimized(self, file_path: Path, file_size: int) -> list[FileEntry]:
-        """Hash-based duplicate detection with on-demand hash calculation."""
-
-        # Step 1: Quick size pre-filtering (this part is correct)
-        size_candidates = []
-        if hasattr(self, "raw_elm"):
-            dir_path_map = self._get_or_build_dir_map()
-            for mtime, size, parent_id, filename in self.raw_elm:
-                if size == file_size and size >= 0 and parent_id in dir_path_map:
-                    candidate_path = dir_path_map[parent_id] / filename
-                    size_candidates.append((candidate_path, mtime, size))
-        else:
-            size_candidates = [(entry.path, entry.mtime, entry.size) for entry in self.size_index.get(file_size, [])]
-
-        if not size_candidates:
-            return []
-
-        # Step 2: Calculate hash for the source file only once
-        source_hash = calculate_file_hash(file_path, self.hash_algo)
-        if not source_hash:
-            return []
-
-        # Step 3: Calculate hashes ONLY for candidates that exist locally
-        matches = []
-        for candidate_path, mtime, size in size_candidates:
-            # FIX: Only proceed if the file exists on the current system
-            if path_is_native_and_exists(candidate_path):
-                # Calculate hash only for existing, size-matched files
-                candidate_hash = calculate_file_hash(Path(candidate_path), self.hash_algo)
-                if candidate_hash and candidate_hash == source_hash:
-                    matches.append(FileEntry(candidate_path, size, mtime, candidate_hash))
-            # If the file doesn't exist locally, we can't verify its hash, so it's NOT a match.
-
-        return matches
-
-    def _get_or_build_dir_map(self):
-        """Build directory path map once and cache it."""
-        if hasattr(self, "_dir_path_map"):
-            return self._dir_path_map
-
-        dir_path_map = {0: self.root_path}
-
-        if hasattr(self, "raw_elm"):
-            # Build from raw elm data
-            for _mtime, size, parent_id, filename in self.raw_elm:
-                if size < 0:  # Directory
-                    dir_id = -size
-                    if parent_id in dir_path_map:
-                        dir_path_map[dir_id] = dir_path_map[parent_id] / filename
-
-        self._dir_path_map = dir_path_map
-        return dir_path_map
-
     @staticmethod
     def find_all_duplicates_bulk(
         source_index: "FileIndex", dest_index: "FileIndex", progress_callback=None, cancel_event=None
     ) -> list[DuplicateMatch]:
         """
         Bulk duplicate detection optimized for scanning operations.
-        Processes files in batches and calculates hashes strategically.
+        Groups source files by size to skip sizes with no destination matches.
         """
-        from collections import defaultdict
+        duplicates: list[DuplicateMatch] = []
 
-        duplicates = []
-
-        # Get source files, grouped by size for efficiency
-        source_files_by_size = defaultdict(list)
-
-        if hasattr(source_index, "raw_elm"):
-            dir_map = source_index._get_or_build_dir_map()
-            for _mtime, size, parent_id, filename in source_index.raw_elm:
-                if size >= 0 and parent_id in dir_map:  # Regular file
-                    file_path = dir_map[parent_id] / filename
-                    if path_is_native_and_exists(file_path):
-                        source_files_by_size[size].append(Path(file_path))
-        else:
-            # Fall back to traditional approach
-            for file_path in source_index.root_path.rglob("*"):
-                if file_path.is_file():
-                    try:
-                        size = file_path.stat().st_size
-                        source_files_by_size[size].append(file_path)
-                    except OSError:
-                        continue
+        # Group source files by size for efficient matching
+        source_files_by_size: dict[int, list[Path]] = defaultdict(list)
+        for file_path in source_index.root_path.rglob("*"):
+            if file_path.is_file():
+                try:
+                    size = file_path.stat().st_size
+                    source_files_by_size[size].append(file_path)
+                except OSError:
+                    continue
 
         total_files = sum(len(files) for files in source_files_by_size.values())
         processed = 0
 
-        # Process each size group
         for size, source_files in source_files_by_size.items():
             if cancel_event and cancel_event.is_set():
                 break
@@ -396,24 +320,11 @@ class FileIndex:
                     "Finding duplicates", f"Processing {len(source_files)} files of size {format_size(size)}"
                 )
 
-            # Find potential destination matches by size first
-            dest_candidates = []
-            if hasattr(dest_index, "raw_elm"):
-                dest_dir_map = dest_index._get_or_build_dir_map()
-                for mtime, dest_size, parent_id, filename in dest_index.raw_elm:
-                    if dest_size == size and dest_size >= 0 and parent_id in dest_dir_map:
-                        dest_path = dest_dir_map[parent_id] / filename
-                        dest_candidates.append((dest_path, mtime, dest_size))
-            else:
-                dest_candidates = [
-                    (entry.path, entry.mtime, entry.size) for entry in dest_index.size_index.get(size, [])
-                ]
-
-            if not dest_candidates:
+            # Skip sizes with no destination matches
+            if size not in dest_index.size_index:
                 processed += len(source_files)
                 continue
 
-            # Now process source files of this size
             for source_file in source_files:
                 if cancel_event and cancel_event.is_set():
                     break
@@ -425,16 +336,19 @@ class FileIndex:
                         f"Checked {processed}/{total_files} files ({len(duplicates)} duplicates found)",
                     )
 
-                # Use optimized duplicate detection
-                matches = dest_index.find_potential_duplicates_optimized(source_file)
-
+                matches = dest_index.find_potential_duplicates(source_file)
                 if matches:
                     duplicates.append(DuplicateMatch(source_file=source_file, destinations=matches))
 
         return duplicates
 
     def find_potential_duplicates(self, file_path: Path) -> list[FileEntry]:
-        """Finds potential duplicates of a given file in the index."""
+        """Finds potential duplicates of a given file in the index.
+
+        Uses hash_index for pre-computed hashes (from add_file with use_hash=True),
+        or calculates hashes on demand for indices loaded from CAF files.
+        Falls back to name+size comparison when hashing is disabled.
+        """
         try:
             stat_info = file_path.stat()
             file_size = stat_info.st_size
@@ -446,9 +360,20 @@ class FileIndex:
                 file_hash = calculate_file_hash(file_path, self.hash_algo)
                 if not file_hash:
                     return []
-                return self.hash_index.get((file_size, file_hash), [])
+
+                # Try pre-computed hash index first (fast path)
+                if self.hash_index:
+                    return self.hash_index.get((file_size, file_hash), [])
+
+                # Fall back to on-demand hash calculation (for CAF-loaded indices)
+                matches = []
+                for entry in self.size_index[file_size]:
+                    if path_is_native_and_exists(entry.path):
+                        candidate_hash = calculate_file_hash(Path(entry.path), self.hash_algo)
+                        if candidate_hash == file_hash:
+                            matches.append(FileEntry(entry.path, entry.size, entry.mtime, candidate_hash))
+                return matches
             else:
-                # Fallback to name comparison if not using hashes
                 return [e for e in self.size_index[file_size] if e.path.name == file_path.name]
         except OSError:
             return []

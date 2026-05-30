@@ -5,19 +5,9 @@ import subprocess
 import sys
 
 
-def _extract_json(stdout: str):
-    """Extract JSON from stdout that may contain non-JSON prefix lines (e.g. [INDEX] logs)."""
-    # Try each line as potential JSON start
-    lines = stdout.split("\n")
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped in ("[", "{", "[]", "{}") or stripped.startswith('{"') or stripped.startswith('[{'):
-            candidate = "\n".join(lines[i:])
-            try:
-                return json.loads(candidate)
-            except json.JSONDecodeError:
-                continue
-    raise ValueError(f"No JSON found in output: {stdout[:200]}")
+def _parse_json_stdout(stdout: str):
+    """Parse JSON from CLI stdout. Diagnostic prints now go to stderr, so stdout should be clean."""
+    return json.loads(stdout)
 
 
 class TestCLIHelp:
@@ -96,7 +86,7 @@ class TestCLIDupes:
             text=True,
         )
         assert result.returncode == 0
-        data = _extract_json(result.stdout)
+        data = _parse_json_stdout(result.stdout)
         assert isinstance(data, list)
         assert len(data) == 1
         assert "data.bin" in data[0]["source_file"]["path"]
@@ -117,7 +107,7 @@ class TestCLIDupes:
             text=True,
         )
         assert result.returncode == 0
-        data = _extract_json(result.stdout)
+        data = _parse_json_stdout(result.stdout)
         assert len(data) == 1
 
     def test_find_dupes_no_duplicates(self, tmp_path):
@@ -167,6 +157,6 @@ class TestCLIDupes:
             text=True,
         )
         assert result.returncode == 0
-        data = _extract_json(result.stdout)
+        data = _parse_json_stdout(result.stdout)
         assert len(data) == 1
         assert len(data[0]["duplicates_found"]) == 2
