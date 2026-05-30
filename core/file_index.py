@@ -244,62 +244,6 @@ class FileIndex:
             chars.extend(char)
         return chars.decode("latin-1", errors="replace")
 
-    def _ensure_indexes_built(self):
-        """This method is no longer needed since we build indexes during load."""
-        pass
-
-    def _ensure_indexes_built_really(self):
-        """Build search indexes on-demand, not during load."""
-        # Check if we need to build indexes
-        if not hasattr(self, "_indexes_built"):
-            return  # For newly created indexes, no need to build from raw_elm
-
-        if self._indexes_built:
-            return  # Already built
-
-        if not hasattr(self, "raw_elm"):
-            return  # No raw data to build from
-
-        # Build directory path map first (like original)
-        dir_path_map = {0: self.root_path}
-
-        # First pass: build directory structure
-        for _mtime, size, parent_id, filename in self.raw_elm:
-            if size < 0:  # Directory
-                dir_id = -size
-                if parent_id in dir_path_map:
-                    dir_path_map[dir_id] = dir_path_map[parent_id] / filename
-
-        # Second pass: build search indexes
-        self.size_index.clear()
-        self.hash_index.clear()
-
-        for mtime, size, parent_id, filename in self.raw_elm:
-            if size >= 0 and parent_id in dir_path_map:  # It's a file
-                path = dir_path_map[parent_id] / filename
-
-                # Get actual size for legacy CAF files
-                actual_size = size
-                if size == 0 and path_is_native_and_exists(path):
-                    try:
-                        actual_size = Path(path).stat().st_size
-                    except OSError:
-                        actual_size = 0
-
-                # Calculate hash only if needed and file exists
-                entry_hash = ""
-                if self.use_hash and path_is_native_and_exists(path):
-                    entry_hash = calculate_file_hash(Path(path), self.hash_algo)
-
-                # Create entry and add to indexes
-                entry = FileEntry(path, actual_size, mtime, entry_hash)
-                self.size_index[actual_size].append(entry)
-
-                if self.use_hash and entry_hash:
-                    self.hash_index[(actual_size, entry_hash)].append(entry)
-
-        self._indexes_built = True
-
     @classmethod
     def load_metadata_only(cls, caf_path: Path) -> Optional[dict]:
         """Fast metadata extraction without loading file entries."""
@@ -377,7 +321,6 @@ class FileIndex:
                     candidate_path = dir_path_map[parent_id] / filename
                     size_candidates.append((candidate_path, mtime, size))
         else:
-            self._ensure_indexes_built()
             size_candidates = [(entry.path, entry.mtime, entry.size) for entry in self.size_index.get(file_size, [])]
 
         if not size_candidates:
@@ -398,23 +341,6 @@ class FileIndex:
                 if candidate_hash and candidate_hash == source_hash:
                     matches.append(FileEntry(candidate_path, size, mtime, candidate_hash))
             # If the file doesn't exist locally, we can't verify its hash, so it's NOT a match.
-
-        return matches
-
-    def _find_name_duplicates_optimized(self, file_path: Path, file_size: int) -> list[FileEntry]:
-        """Name-based duplicate detection for when hashes are disabled."""
-        matches = []
-
-        if hasattr(self, "raw_elm"):
-            dir_path_map = self._get_or_build_dir_map()
-            for mtime, size, parent_id, filename in self.raw_elm:
-                if size == file_size and size >= 0 and filename == file_path.name and parent_id in dir_path_map:
-                    candidate_path = dir_path_map[parent_id] / filename
-                    matches.append(FileEntry(candidate_path, size, mtime, ""))
-        else:
-            # Fall back to existing approach
-            self._ensure_indexes_built()
-            matches = [e for e in self.size_index.get(file_size, []) if e.path.name == file_path.name]
 
         return matches
 
@@ -595,112 +521,6 @@ class FileIndex:
 
         # 4. Write the CAF file
         self._write_caf(caf_path, elm, info)
-
-    @classmethod
-    def load_from_caf_old(cls, caf_path: Path, use_hash: bool, hash_algo: str) -> Optional["FileIndex"]:
-        """
-        Loads an index from a .caf file, efficiently populating the in-memory
-        dictionaries without re-scanning the disk.
-        """
-        if not caf_path.is_file():
-            return None
-
-        with caf_path.open("rb") as buffer:
-            try:
-                # Header validation
-                magic = struct.unpack("<L", buffer.read(4))[0]
-                if not (magic > 0 and magic % cls.ulModus == cls.ulMagicBase):
-                    return None
-                version = int(magic / cls.ulModus)
-                if version > 2:
-                    version = struct.unpack("<h", buffer.read(2))[0]
-                if version > cls.saveVersion:
-                    return None
-
-                # Header parsing
-                buffer.read(4)  # Skip date
-                device = cls._read_string(buffer) if version >= 2 else ""
-
-                # Platform-independent path handling
-                is_windows_path = "\\" in device or (len(device) > 1 and device[1] == ":")
-                PathClass = PureWindowsPath if is_windows_path else PurePosixPath
-                index = cls(PathClass(device), use_hash, hash_algo)
-
-                cls._read_string(buffer)  # volume
-                cls._read_string(buffer)  # alias
-                buffer.read(4)  # serial
-                cls._read_string(buffer) if version >= 4 else ""
-                if version >= 1:
-                    buffer.read(4)  # freesize
-                if version >= 6:
-                    buffer.read(2)  # archive
-
-                # Skip info block
-                dir_count = struct.unpack("<l", buffer.read(4))[0]
-                for i in range(dir_count):
-                    if i == 0 or version <= 3:
-                        cls._read_string(buffer)
-                    if version >= 3:
-                        buffer.read(12)  # file_count, total_size
-
-                # Rebuild directory structure from elm
-                dir_path_map = {0: index.root_path}
-                file_count = struct.unpack("<l", buffer.read(4))[0]
-                raw_elm = []
-                for _ in range(file_count):
-                    mtime = struct.unpack("<L", buffer.read(4))[0]
-
-                    # Handle legacy CAF versions that don't store file sizes
-                    if version <= 6:
-                        size = 0  # Legacy versions don't have size information
-                    else:
-                        size = struct.unpack("<q", buffer.read(8))[0]
-
-                    # Handle different parent ID formats by version
-                    if version > 7:
-                        parent_id = struct.unpack("<L", buffer.read(4))[0]
-                    else:
-                        parent_id = struct.unpack("<H", buffer.read(2))[0]
-
-                    filename = cls._read_string(buffer)
-                    raw_elm.append((mtime, size, parent_id, filename))
-
-                # First pass: build directory path map
-                for _, size, parent_id, name in raw_elm:
-                    if size < 0:  # It's a directory
-                        dir_id = -size
-                        if parent_id in dir_path_map:
-                            dir_path_map[dir_id] = dir_path_map[parent_id] / name
-
-                # Second pass: populate the index
-                for mtime, size, parent_id, name in raw_elm:
-                    if size >= 0 and parent_id in dir_path_map:
-                        path = dir_path_map[parent_id] / name
-                        path_exists = path_is_native_and_exists(path)
-                        concrete_path = Path(path) if path_exists else None
-
-                        # For legacy CAF files without size info, try to get actual size if file exists
-                        actual_size = size
-                        if version <= 6 and size == 0 and path_exists:
-                            try:
-                                actual_size = concrete_path.stat().st_size
-                            except OSError:
-                                actual_size = 0
-
-                        entry_hash = ""
-                        if use_hash and path_exists:
-                            # Hashes are not stored in CAF, must be calculated on demand
-                            entry_hash = calculate_file_hash(concrete_path, hash_algo)
-
-                        entry = FileEntry(path, actual_size, mtime, entry_hash)
-                        index.size_index[actual_size].append(entry)
-                        if use_hash and entry_hash:
-                            index.hash_index[(actual_size, entry_hash)].append(entry)
-                        index.total_files += 1
-
-                return index
-            except (struct.error, OSError, IndexError):
-                return None
 
     # --- Private static I/O helpers ---
     @staticmethod

@@ -193,7 +193,6 @@ def search_files_in_index(
     return results
 
 
-# ... (Previous helper functions build_destination_index, find_duplicates, etc. remain the same)
 def build_destination_index(config: ScanConfig, progress_callback=None, cancel_event=None) -> Optional[FileIndex]:
     filtered_paths = filter_overlapping_paths(config.dest_paths)
     dummy_root = Path(".")
@@ -247,64 +246,6 @@ def build_destination_index(config: ScanConfig, progress_callback=None, cancel_e
     return combined_index
 
 
-def build_destination_index_selective(
-    config: ScanConfig, progress_callback=None, cancel_event=None, translator_get_func=None
-) -> Optional[FileIndex]:
-    t_get = translator_get_func or t.get
-    filtered_paths = filter_overlapping_paths(config.dest_paths)
-    if progress_callback:
-        progress_callback(t_get("building_index"), f"Processing {len(filtered_paths)} destination folders")
-    dummy_root = Path(".")
-    combined_index = FileIndex(dummy_root, config.use_hash, config.hash_algo)
-    for i, dest_path in enumerate(filtered_paths):
-        if cancel_event and cancel_event.is_set():
-            break
-        if not dest_path.is_dir():
-            continue
-        caf_path = get_caf_path(dest_path, config.hash_algo)
-        dest_index = None
-        if progress_callback:
-            progress_callback(f"Processing folder {i + 1}/{len(filtered_paths)}", f"Folder: {dest_path.name}")
-        force_recreate = (
-            hasattr(config, "selective_recreation_paths") and dest_path in config.selective_recreation_paths
-        )
-        if config.reuse_indices and not force_recreate and caf_path.exists():
-            if progress_callback:
-                progress_callback(f"Loading index for {dest_path.name}", "Please wait...")
-            dest_index = FileIndex.load_from_caf(caf_path, config.use_hash, config.hash_algo)
-        if not dest_index:
-            if progress_callback:
-                progress_callback(f"Creating new index for {dest_path.name}", t_get("scanning_files"))
-            dest_index = FileIndex(dest_path, config.use_hash, config.hash_algo)
-            for root, _, files in os.walk(dest_path):
-                if cancel_event and cancel_event.is_set():
-                    break
-                root_path = Path(root)
-                for j, filename in enumerate(files):
-                    if cancel_event and cancel_event.is_set():
-                        break
-                    if progress_callback and j % 200 == 0:
-                        progress_callback(f"Indexing {dest_path.name}", f"File: {filename}")
-                    dest_index.add_file(root_path / filename)
-            if cancel_event and cancel_event.is_set():
-                break
-            if config.reuse_indices:
-                if progress_callback:
-                    progress_callback(f"Saving index for {dest_path.name}", f"Path: {caf_path.name}")
-                dest_index.save_to_caf(caf_path)
-        if not dest_index:
-            continue
-        for size, entries in dest_index.size_index.items():
-            combined_index.size_index[size].extend(entries)
-            combined_index.all_files.extend(entries)
-        if config.use_hash:
-            for key, entries in dest_index.hash_index.items():
-                combined_index.hash_index[key].extend(entries)
-        combined_index.total_files += dest_index.total_files
-    combined_index.build_optimized_indices()
-    return combined_index
-
-
 def find_duplicates_with_locations(
     source_path: Path, dest_index: FileIndex, progress_callback=None, cancel_event=None
 ) -> list[DuplicateMatch]:
@@ -327,21 +268,3 @@ def find_duplicates_with_locations(
     if progress_callback:
         progress_callback(t.get("finding_duplicates"), "Comparing against destination indices...")
     return FileIndex.find_all_duplicates_bulk(source_index, dest_index, progress_callback, cancel_event)
-
-
-def find_duplicates_with_locations_legacy(
-    source_path: Path, dest_index: FileIndex, progress_callback=None, cancel_event=None
-) -> list[DuplicateMatch]:
-    duplicates = []
-    source_files = [p for p in source_path.rglob("*") if p.is_file()]
-    if progress_callback:
-        progress_callback(t.get("finding_duplicates"), f"Checking {len(source_files)} files")
-    for i, file_path in enumerate(source_files):
-        if cancel_event and cancel_event.is_set():
-            break
-        if progress_callback and i % 50 == 0:
-            progress_callback(t.get("finding_duplicates"), f"Checked {i}/{len(source_files)} files")
-        potential_matches = dest_index.find_potential_duplicates_optimized(file_path)
-        if potential_matches:
-            duplicates.append(DuplicateMatch(source_file=file_path, destinations=potential_matches))
-    return duplicates

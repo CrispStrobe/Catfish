@@ -2,7 +2,8 @@
 
 """Configuration management."""
 
-import builtins
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
@@ -57,7 +58,7 @@ class Config:
         """Set configuration value."""
         self.config[key] = value
 
-    def get_active_indices(self) -> builtins.set[str]:
+    def get_active_indices(self) -> set[str]:
         """Get set of active index file paths."""
         return set(self.config.get("active_indices", []))
 

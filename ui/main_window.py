@@ -15,7 +15,7 @@ from core.data_structures import ScanConfig, SearchCriteria, SearchResult
 from core.file_index import FileIndex
 from core.index_discovery import IndexDiscovery
 from core.scan_operations import run_scan_with_progress_enhanced
-from core.search_logic import _safe_compile_pattern, search_files_in_index
+from core.search_logic import search_files_in_index
 from ui.dialogs import IndexCreationDialog
 from ui.duplicate_results import DuplicateResultsWindow
 from ui.index_browser import IndexBrowserWindow
@@ -748,57 +748,6 @@ class UniversalSearchApp:
             messagebox.showerror(t.get("error"), t.get("search_error", str(e)))
             self.status_var.set("Search failed")
 
-    def perform_search_old(self):
-        """Perform file search across only active indices with improved display."""
-        try:
-            criteria = self.parse_search_criteria()
-            self.search_tree.delete(*self.search_tree.get_children())
-            self.search_results.clear()
-
-            # Get only active indices
-            active_indices = self.get_active_indices_only()
-            if not active_indices:
-                messagebox.showwarning(
-                    "No Active Indices", "No active indices found. Please activate at least one index."
-                )
-                return
-
-            self.status_var.set(t.get("searching_status"))
-            self.root.update_idletasks()
-
-            total_results = 0
-            for caf_path in active_indices:
-                if caf_path.exists():
-                    # Load index and search
-                    file_index = self.load_index_for_search(caf_path)
-                    if file_index:
-                        results = search_files_in_index(file_index, criteria)
-                        total_results += len(results)
-
-                        # Extract clean index name
-                        try:
-                            # Get the filename without .caf extension
-                            index_name = caf_path.name
-                            if index_name.lower().endswith(".caf"):
-                                index_name = index_name[:-4]  # Remove .caf extension
-
-                            # Clean up the name further if needed
-                            if "_index" in index_name:
-                                index_name = index_name.replace("_index", "")
-
-                        except (AttributeError, TypeError):
-                            index_name = "Unknown"
-
-                        # Add results with clean index name
-                        for result in results:
-                            self.add_search_result_to_tree(result, index_name)
-
-            self.status_var.set(t.get("found_status", total_results))
-
-        except Exception as e:
-            messagebox.showerror(t.get("error"), t.get("search_error", str(e)))
-            self.status_var.set("Search failed")
-
     def parse_search_criteria(self) -> SearchCriteria:
         """Parse search criteria from UI."""
         # Name pattern
@@ -1077,12 +1026,6 @@ class UniversalSearchApp:
         else:
             self.dup_hash_combo.config(state="disabled")
 
-    def clear_duplicate_form(self):
-        """Clear the duplicate detection form."""
-        self.dup_source_var.set("")
-        self.dup_source_path = None
-        self.clear_dup_dest_folders_enhanced()
-
     def start_duplicate_scan(self):
         """Start duplicate scan with enhanced features."""
         # Validate input
@@ -1295,117 +1238,6 @@ class UniversalSearchApp:
         progress_window.root.destroy()
 
         search_thread_obj.join(timeout=1.0)
-
-    def search_files_in_index_with_progress(
-        self, file_index, criteria, progress_callback, result_callback, cancel_event, index_name
-    ):
-        """Search files in an index with optimized string matching and progress reporting."""
-        results = []
-
-        # --- OPTIMIZATION: Detect simple glob patterns to avoid Regex overhead ---
-        name_regex = None
-        simple_query = None
-        query_type = None  # 'contains', 'startswith', 'endswith', 'exact'
-
-        if criteria.name_pattern:
-            pat = criteria.name_pattern
-            # Check for simple wildcards without internal wildcards
-            if "*" in pat or "?" in pat:
-                is_start_star = pat.startswith("*")
-                is_end_star = pat.endswith("*")
-                clean_pat = pat.strip("*")
-
-                # Verify no internal wildcards (e.g. "te*xt")
-                if "*" not in clean_pat and "?" not in clean_pat:
-                    simple_query = clean_pat.lower()
-                    if is_start_star and is_end_star:
-                        query_type = "contains"
-                    elif is_start_star:
-                        query_type = "endswith"
-                    elif is_end_star:
-                        query_type = "startswith"
-
-            # If not optimized, fall back to Regex
-            if not simple_query:
-                try:
-                    name_regex = _safe_compile_pattern(criteria.name_pattern)
-                except ValueError as e:
-                    raise ValueError(t.get("invalid_regex", e)) from e
-
-        # Pre-filter size buckets for better performance
-        relevant_sizes = []
-        total_entries = 0
-
-        for size in file_index.size_index:
-            # Size filtering at bucket level
-            if criteria.size_min is not None and size < criteria.size_min:
-                continue
-            if criteria.size_max is not None and size > criteria.size_max:
-                continue
-            relevant_sizes.append(size)
-            total_entries += len(file_index.size_index[size])
-
-        if total_entries == 0:
-            return results
-
-        processed = 0
-        last_progress_update = 0
-
-        # Search through relevant size buckets only
-        for size in relevant_sizes:
-            if cancel_event and cancel_event.is_set():
-                break
-
-            entries = file_index.size_index[size]
-
-            for entry in entries:
-                if cancel_event and cancel_event.is_set():
-                    break
-
-                processed += 1
-
-                # Progress updates (every 2000 files to reduce GUI overhead)
-                if processed - last_progress_update >= 2000:
-                    progress_percentage = (processed / total_entries) * 100
-                    progress_callback(
-                        f"Searching {index_name}",
-                        f"Scanned {processed:,}/{total_entries:,} ({progress_percentage:.0f}%)",
-                    )
-                    last_progress_update = processed
-
-                # --- OPTIMIZED NAME MATCHING ---
-                if simple_query:
-                    # Fast string matching (Case insensitive)
-                    name_lower = entry.path.name.lower()
-                    if query_type == "contains":
-                        if simple_query not in name_lower:
-                            continue
-                    elif query_type == "endswith":
-                        if not name_lower.endswith(simple_query):
-                            continue
-                    elif query_type == "startswith":
-                        if not name_lower.startswith(simple_query):
-                            continue
-                elif name_regex:
-                    # Slow Regex matching
-                    if not name_regex.search(entry.path.name):
-                        continue
-                # -------------------------------
-
-                # Date filtering
-                if criteria.date_min or criteria.date_max:
-                    file_mtime = dt.fromtimestamp(entry.mtime)
-                    if criteria.date_min and file_mtime < criteria.date_min:
-                        continue
-                    if criteria.date_max and file_mtime > criteria.date_max:
-                        continue
-
-                # File passed all criteria
-                result = SearchResult(entry.path, entry.size, entry.mtime, entry.hash)
-                results.append(result)
-                result_callback(result, index_name)
-
-        return results
 
     def run(self):
         """Run the application."""
