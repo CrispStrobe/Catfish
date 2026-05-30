@@ -29,9 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `dt` variable shadowing `datetime` import in `build_optimized_indices`
 - Releases page link in readme pointing to a Google search instead of GitHub
 - Diagnostic `print()` calls in `file_index.py` polluting stdout (moved to stderr), which broke JSON CLI output
+- `build_binaries.py` hardcoded version `1.0.0` and stale app name; now reads version from `__init__.py` and uses `CatfishSearch`
+- `find_all_duplicates_bulk` redundantly re-scanned the filesystem instead of using the already-populated `source_index.size_index`
 
 ### Removed
-- ~760 lines of dead/legacy code:
+- ~800 lines of dead/legacy code:
   - `load_from_caf_old`, `_ensure_indexes_built`, `_ensure_indexes_built_really`
   - `_find_name_duplicates_optimized`, `_read_caf_string_fast` (duplicate of `_read_string`)
   - `perform_search_old`, `search_files_in_index_with_progress`
@@ -41,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `find_potential_duplicates_optimized` (merged into `find_potential_duplicates`)
   - `build_destination_index_selective` (consolidated into `build_destination_index`)
   - Dead `hasattr(self, "raw_elm")` branches and `_get_or_build_dir_map`
+  - Unused `get_display_path` function
 - Redundant `setup.py` configuration (reduced to minimal shim)
 - Duplicate `run_scan_with_progress_enhanced` (now alias of `run_scan_with_progress`)
 
@@ -49,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package name changed from `file-search` to `catfish-search`
 - Version bumped from 1.0.0 to 1.1.0
 - `scan_operations.py` reduced from 228 to 76 lines by reusing `search_logic.build_destination_index`
+- `build_binaries.py` app name changed to `CatfishSearch`, macOS bundle identifier fixed
 
 ## [1.0.0] - 2025
 
