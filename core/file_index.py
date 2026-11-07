@@ -360,11 +360,15 @@ class FileIndex:
                         raise ValueError("Unknown CAF parent directory")
                     children[parent].append((directory_id, name, mtime))
                 dir_paths = {0: index.root_path}
+                seen_paths = {index.root_path}
                 pending = [0]
                 while pending:
                     parent_id = pending.pop()
                     for directory_id, name, mtime in children[parent_id]:
                         path = dir_paths[parent_id] / name
+                        if path in seen_paths:
+                            raise ValueError("Duplicate CAF directory path")
+                        seen_paths.add(path)
                         dir_paths[directory_id] = path
                         index.directory_mtimes[path] = mtime
                         pending.append(directory_id)
@@ -374,7 +378,11 @@ class FileIndex:
                 for mtime, size, parent, name in files:
                     if parent not in dir_paths:
                         raise ValueError("Unknown CAF file parent")
-                    entry = FileEntry(dir_paths[parent] / name, size, mtime, "")
+                    path = dir_paths[parent] / name
+                    if path in seen_paths:
+                        raise ValueError("Duplicate CAF file path or file/folder collision")
+                    seen_paths.add(path)
+                    entry = FileEntry(path, size, mtime, "")
                     index.size_index[size].append(entry)
                     index.all_files.append(entry)
                 index.total_files = len(index.all_files)
@@ -538,11 +546,19 @@ class FileIndex:
         caf_path = Path(caf_path)
         self._validate_caf_text(str(self.root_path))
         self._validate_caf_text(self.root_path.name)
+        root_text = str(self.root_path)
+        if isinstance(self.root_path, PurePosixPath) and (
+            "\\" in root_text or (len(root_text) > 1 and root_text[1] == ":")
+        ):
+            raise ValueError("This POSIX root path would be interpreted as a Windows path by CAF readers")
 
         all_entries = [entry for entries in self.size_index.values() for entry in entries]
         directories = {self.root_path}
+        file_paths = set()
 
         def include_directory(directory):
+            if directory in directories:
+                return
             relative = directory.relative_to(self.root_path)
             for component in relative.parts:
                 self._validate_caf_name(component)
@@ -557,15 +573,20 @@ class FileIndex:
             include_directory(directory)
         for entry in all_entries:
             self._check_save_cancelled(cancel_event)
-            relative = entry.path.relative_to(self.root_path)
-            if not relative.parts:
+            if entry.path == self.root_path:
                 raise ValueError("A catalog file cannot be its own root folder")
-            for component in relative.parts:
-                self._validate_caf_name(component)
+            if entry.path in file_paths:
+                raise ValueError(f"Duplicate CAF file path: {entry.path}")
+            file_paths.add(entry.path)
+            # A validated parent establishes containment. Avoid revalidating
+            # the same ancestor components once for every sibling file.
+            self._validate_caf_name(entry.path.name)
+            include_directory(entry.path.parent)
             if not 0 <= entry.size <= 0x7FFFFFFFFFFFFFFF:
                 raise ValueError(f"CAF cannot represent this file size: {entry.path}")
             self._validate_caf_mtime(entry.mtime, entry.path)
-            include_directory(entry.path.parent)
+        if file_paths & directories:
+            raise ValueError("A CAF path cannot be both a file and a folder")
 
         # Sorting by depth makes parent IDs available before their children and
         # gives deterministic serialization without any second filesystem walk.
@@ -618,7 +639,7 @@ class FileIndex:
     @classmethod
     def _validate_caf_name(cls, name):
         cls._validate_caf_text(name)
-        if not name or name in (".", "..") or "/" in name or "\\" in name:
+        if not name or name in (".", "..") or "/" in name or "\\" in name or (len(name) > 1 and name[1] == ":"):
             raise ValueError(f"Invalid CAF path component: {name!r}")
 
     # --- Private static I/O helpers ---

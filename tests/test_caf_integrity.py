@@ -128,7 +128,7 @@ def test_foreign_windows_paths_can_be_saved_again_without_disk_access(tmp_path):
     assert _rows(FileIndex.load_from_caf(copy, False, "md5")) == _rows(loaded)
 
 
-@pytest.mark.parametrize("name", ["snow-雪.txt", "bad\x00name", "back\\slash.txt"])
+@pytest.mark.parametrize("name", ["snow-雪.txt", "bad\x00name", "back\\slash.txt", "C:escape.txt"])
 def test_unsupported_names_reject_without_replacing_existing_catalog(tmp_path, name):
     catalog = tmp_path / "old.caf"
     catalog.write_bytes(b"previous good catalog")
@@ -163,6 +163,22 @@ def test_outside_root_path_is_not_silently_dropped(tmp_path):
     with pytest.raises(ValueError):
         index.save_to_caf(tmp_path / "outside.caf")
     assert not (tmp_path / "outside.caf").exists()
+
+
+@pytest.mark.parametrize("names", [("a", "a"), ("a", "a/b"), ("a/b", "a")])
+def test_writer_rejects_duplicate_paths_and_file_folder_collisions_before_replacement(tmp_path, names):
+    catalog = tmp_path / "previous.caf"
+    catalog.write_bytes(b"previous")
+    index = FileIndex(tmp_path)
+    for name in names:
+        entry = FileEntry(tmp_path / name, 1, 1730000000, "")
+        index.size_index[1].append(entry)
+        index.all_files.append(entry)
+        index.total_files += 1
+    with pytest.raises(ValueError, match=r"Duplicate|both a file and a folder"):
+        index.save_to_caf(catalog)
+    assert catalog.read_bytes() == b"previous"
+    assert not list(tmp_path.glob(".previous.caf.*.tmp"))
 
 
 @pytest.mark.parametrize("failure", ["write", "replace", "cancel"])
@@ -215,6 +231,11 @@ def test_truncated_catalog_never_returns_a_successful_partial_index(tmp_path, re
         [(11, -1, 2, "a"), (12, -2, 1, "b")],
         [(11, -1, 0, "a"), (12, -1, 0, "b")],
         [(11, 0, 0, "../escape")],
+        [(11, 0, 0, "C:escape")],
+        [(11, 1, 0, "same"), (12, 2, 0, "same")],
+        [(11, -1, 0, "same"), (12, -2, 0, "same")],
+        [(11, -1, 0, "a"), (12, 1, 0, "a"), (13, 1, 1, "b")],
+        [(12, 1, 0, "a"), (13, 1, 1, "b"), (11, -1, 0, "a")],
     ],
 )
 def test_invalid_parent_or_path_rejects_the_whole_catalog(tmp_path, entries):
