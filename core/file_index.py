@@ -166,7 +166,9 @@ class FileIndex:
 
             file_hash = ""
             if self.use_hash:
-                file_hash = calculate_file_hash(file_path, self.hash_algo, cancel_event=cancel_event)
+                file_hash = calculate_file_hash(
+                    file_path, self.hash_algo, cancel_event=cancel_event, expected_stat=stat_info
+                )
                 if not file_hash:
                     if cancel_event is not None and cancel_event.is_set():
                         self.cancelled = True

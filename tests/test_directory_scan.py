@@ -4,6 +4,7 @@ import hashlib
 import os
 from pathlib import Path
 from threading import Event
+from types import SimpleNamespace
 
 import pytest
 
@@ -197,6 +198,74 @@ def test_failed_hash_is_reported_and_not_mistaken_for_zero_byte_data(tmp_path, m
     assert not index.is_complete
     assert index.scan_error_count == 1
     assert index.total_files == 0
+
+
+def test_hash_rejects_metadata_that_changed_before_opening(tmp_path):
+    file = tmp_path / "changed.bin"
+    file.write_bytes(b"before")
+    earlier = file.stat()
+    file.write_bytes(b"a different file version")
+    index = FileIndex(tmp_path, True, "sha256")
+    assert not index.add_file(file, stat_info=earlier)
+    assert index.scan_error_count == 1
+    assert not index.all_files
+
+
+@pytest.mark.parametrize("replace_path", [False, True])
+def test_hash_rejects_mutation_or_path_replacement_during_read(tmp_path, monkeypatch, replace_path):
+    if replace_path and os.name == "nt":
+        pytest.skip("Windows normally denies replacing an open file")
+    file = tmp_path / "changing.bin"
+    file.write_bytes(b"x" * (2 * 1024 * 1024))
+    earlier = file.stat()
+    replacement = tmp_path / "replacement.bin"
+    if replace_path:
+        replacement.write_bytes(b"y" * earlier.st_size)
+        os.utime(replacement, ns=(earlier.st_atime_ns, earlier.st_mtime_ns))
+    original = hashlib.new
+
+    class MutatingHash:
+        def __init__(self):
+            self.hash = original("sha256")
+            self.changed = False
+
+        def update(self, chunk):
+            self.hash.update(chunk)
+            if not self.changed:
+                self.changed = True
+                if replace_path:
+                    os.replace(replacement, file)
+                else:
+                    with file.open("r+b") as writer:
+                        writer.write(b"changed")
+                    os.utime(file, ns=(earlier.st_atime_ns, earlier.st_mtime_ns + 1_000_000_000))
+
+        def hexdigest(self):
+            return self.hash.hexdigest()
+
+    monkeypatch.setattr(hashlib, "new", lambda _: MutatingHash())
+    index = FileIndex(tmp_path, True, "sha256")
+    assert not index.add_file(file, stat_info=earlier)
+    assert index.scan_error_count == 1
+    assert not index.hash_index
+
+
+def test_hash_accepts_direntry_metadata_without_windows_file_id_fields(tmp_path):
+    file = tmp_path / "example"
+    file.write_bytes(b"data")
+    actual = file.stat()
+    metadata = SimpleNamespace(
+        st_mode=actual.st_mode,
+        st_dev=0,
+        st_ino=0,
+        st_size=actual.st_size,
+        st_mtime=actual.st_mtime,
+        st_mtime_ns=actual.st_mtime_ns,
+        st_ctime_ns=actual.st_ctime_ns,
+    )
+    index = FileIndex(tmp_path, True, "sha256")
+    assert index.add_file(file, stat_info=metadata)
+    assert index.all_files[0].hash == hashlib.sha256(b"data").hexdigest()
 
 
 def test_search_index_is_invalidated_when_a_file_is_added(tmp_path):

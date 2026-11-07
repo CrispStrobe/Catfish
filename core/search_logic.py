@@ -212,9 +212,6 @@ def build_destination_index(
         if cancel_event and cancel_event.is_set():
             combined_index.cancelled = True
             break
-        if not dest_path.is_dir():
-            continue
-
         caf_path = get_caf_path(dest_path, config.hash_algo)
         dest_index = None
 

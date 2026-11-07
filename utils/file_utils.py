@@ -4,8 +4,10 @@
 
 import datetime
 import hashlib
+import os
 import platform
 import re
+import stat
 import sys
 from datetime import datetime as dt
 from pathlib import Path, PureWindowsPath
@@ -53,11 +55,36 @@ def format_size(size_bytes: int) -> str:
     return f"{size:.1f} PB"
 
 
-def calculate_file_hash(file_path: Path, hash_algo: str, *, cancel_event=None) -> str:
-    """Hash every byte in bounded chunks; cancellation never returns a partial hash."""
+def _same_file_version(first, second):
+    # Windows DirEntry metadata may omit device/inode numbers. Compare identity
+    # when supplied, and always compare the available size and nanosecond dates.
+    identity_known = first.st_ino and first.st_dev and second.st_ino and second.st_dev
+    return (
+        (not identity_known or (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino))
+        and first.st_size == second.st_size
+        and first.st_mtime_ns == second.st_mtime_ns
+        and first.st_ctime_ns == second.st_ctime_ns
+    )
+
+
+def calculate_file_hash(file_path: Path, hash_algo: str, *, cancel_event=None, expected_stat=None) -> str:
+    """Hash all bytes, rejecting cancellation or a detected file-version change.
+
+    Compare the indexed metadata with the opened file and recheck both the
+    descriptor and pathname after reading. This is a best-effort consistency
+    check on a live filesystem, not a filesystem snapshot or a file lock.
+    """
     hash_obj = hashlib.new(hash_algo)
     try:
+        if cancel_event is not None and cancel_event.is_set():
+            return ""
+        expected = expected_stat if expected_stat is not None else file_path.stat()
+        if not stat.S_ISREG(expected.st_mode):
+            raise OSError("Not a regular file")
         with file_path.open("rb") as f:
+            opened = os.fstat(f.fileno())
+            if not stat.S_ISREG(opened.st_mode) or not _same_file_version(expected, opened):
+                raise OSError("File changed between metadata lookup and hashing")
             while True:
                 if cancel_event is not None and cancel_event.is_set():
                     return ""
@@ -65,6 +92,8 @@ def calculate_file_hash(file_path: Path, hash_algo: str, *, cancel_event=None) -
                 if not chunk:
                     break
                 hash_obj.update(chunk)
+            if not _same_file_version(opened, os.fstat(f.fileno())) or not _same_file_version(opened, file_path.stat()):
+                raise OSError("File changed while hashing")
         return hash_obj.hexdigest()
     except OSError as e:
         print(f"Warning: Could not read file {file_path}: {e}", file=sys.stderr)

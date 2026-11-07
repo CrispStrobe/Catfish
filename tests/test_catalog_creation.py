@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from queue import Queue
 from threading import Event, get_ident
+from types import SimpleNamespace
 
 import pytest
 
@@ -126,6 +127,14 @@ class _Root:
         assert get_ident() == self.thread
         self.destroyed = True
 
+    def mainloop(self):
+        while self.calls:
+            key = next(iter(self.calls))
+            self.calls.pop(key)()
+
+    def quit(self):
+        self.calls.clear()
+
 
 def _dialog(tmp_path):
     dialog = IndexCreationDialog.__new__(IndexCreationDialog)
@@ -203,3 +212,42 @@ def test_poll_handles_progress_and_error_then_allows_retry(tmp_path, monkeypatch
     assert dialog.progress_var.value == "Creation failed"
     assert "A folder was unreadable" in shown[0][1]
     assert not dialog.root.calls
+
+
+def test_duplicate_scan_shows_one_persistent_warning_after_partial_results(tmp_path, monkeypatch):
+    from core.data_structures import ScanConfig
+    from core.scan_operations import run_scan_with_progress
+
+    class ImmediateThread:
+        def __init__(self, target):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout):
+            pass
+
+    window = SimpleNamespace(
+        root=_Root(), cancelled=Event(), update_operation=lambda text: None, update_details=lambda text: None
+    )
+    shown = []
+
+    def build(config, progress, cancel, translate):
+        progress("Scan warnings", "A selected folder was unreadable.")
+        progress("Scan warnings", "A selected folder was unreadable.")
+        return FileIndex(tmp_path)
+
+    monkeypatch.setattr("ui.progress_window.ProgressWindow", lambda *args: window)
+    monkeypatch.setattr("core.scan_operations.Thread", ImmediateThread)
+    monkeypatch.setattr("core.scan_operations.build_destination_index", build)
+    monkeypatch.setattr("core.scan_operations.find_duplicates_with_locations", lambda *args: [])
+    monkeypatch.setattr("tkinter.messagebox.showwarning", lambda *args, **kwargs: shown.append(args))
+    result = run_scan_with_progress(ScanConfig(tmp_path, [tmp_path], False, "md5", False, False), None, lambda key: key)
+    assert result == []
+    assert len(shown) == 1
+    assert shown[0][1] == "A selected folder was unreadable."
+    assert window.root.destroyed
