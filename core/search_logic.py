@@ -225,7 +225,9 @@ def build_destination_index(
         if config.reuse_indices and not config.recreate_indices and caf_path.exists():
             if progress_callback:
                 progress_callback(f"Loading index for {dest_path.name}", "Please wait...")
-            dest_index = FileIndex.load_from_caf(caf_path, config.use_hash, config.hash_algo)
+            dest_index = FileIndex.load_from_caf(
+                caf_path, config.use_hash, config.hash_algo, build_search_indices=False
+            )
 
         # Build new index if needed
         if not dest_index:
@@ -251,7 +253,11 @@ def build_destination_index(
             if config.reuse_indices and dest_index.is_complete:
                 if progress_callback:
                     progress_callback(f"Saving index for {dest_path.name}", f"Path: {caf_path.name}")
-                dest_index.save_to_caf(caf_path)
+                try:
+                    dest_index.save_to_caf(caf_path, cancel_event=cancel_event)
+                except InterruptedError:
+                    combined_index.cancelled = True
+                    break
 
         if not dest_index:
             continue

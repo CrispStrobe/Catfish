@@ -6,6 +6,7 @@ import os
 import stat
 import struct
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from datetime import datetime as dt
@@ -218,141 +219,171 @@ class FileIndex:
         elapsed = time.time() - t0
         print(f" Done in {elapsed:.2f}s", file=sys.stderr)
 
-    def _write_caf(self, caf_path, elm, info):
-        with caf_path.open("wb") as buffer:
-            buffer.write(struct.pack("<L", 3 * self.ulModus + self.ulMagicBase))
-            buffer.write(struct.pack("<h", self.saveVersion))
-            buffer.write(struct.pack("<L", int(time.time())))
-            self._write_string(buffer, str(self.root_path))
-            self._write_string(buffer, self.root_path.name)
-            self._write_string(buffer, self.root_path.name)
-            buffer.write(struct.pack("<L", 0))
-            self._write_string(buffer, "Universal Search Index")
-            buffer.write(struct.pack("<f", 0.0))
-            buffer.write(struct.pack("<h", 0))
-            buffer.write(struct.pack("<l", len(info)))
-            for i, (_dir_id, fc, ts) in enumerate(info):
-                if i == 0:
-                    self._write_string(buffer, "")
-                buffer.write(struct.pack("<l", fc))
-                buffer.write(struct.pack("<d", ts))
-            buffer.write(struct.pack("<l", len(elm)))
-            for mtime, size, parent_id, name in elm:
-                buffer.write(struct.pack("<L", mtime))
-                buffer.write(struct.pack("<q", size))
-                buffer.write(struct.pack("<L", parent_id))
-                self._write_string(buffer, name)
+    def _write_caf(self, caf_path, elm, info, cancel_event=None):
+        """Write beside the destination and replace it only after a full flush."""
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", prefix=f".{caf_path.name}.", suffix=".tmp", dir=caf_path.parent, delete=False
+            ) as buffer:
+                temporary_path = Path(buffer.name)
+                self._write_caf_stream(buffer, elm, info, cancel_event)
+                buffer.flush()
+                os.fsync(buffer.fileno())
+            self._check_save_cancelled(cancel_event)
+            os.replace(temporary_path, caf_path)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+
+    def _write_caf_stream(self, buffer, elm, info, cancel_event):
+        self._check_save_cancelled(cancel_event)
+        buffer.write(struct.pack("<L", 3 * self.ulModus + self.ulMagicBase))
+        buffer.write(struct.pack("<h", self.saveVersion))
+        buffer.write(struct.pack("<L", int(time.time())))
+        self._write_string(buffer, str(self.root_path))
+        self._write_string(buffer, self.root_path.name)
+        self._write_string(buffer, self.root_path.name)
+        buffer.write(struct.pack("<L", 0))
+        self._write_string(buffer, "Universal Search Index")
+        buffer.write(struct.pack("<f", 0.0))
+        buffer.write(struct.pack("<h", 0))
+        buffer.write(struct.pack("<l", len(info)))
+        for i, (_dir_id, fc, ts) in enumerate(info):
+            self._check_save_cancelled(cancel_event)
+            if i == 0:
+                self._write_string(buffer, "")
+            buffer.write(struct.pack("<l", fc))
+            buffer.write(struct.pack("<d", ts))
+        buffer.write(struct.pack("<l", len(elm)))
+        for mtime, size, parent_id, name in elm:
+            self._check_save_cancelled(cancel_event)
+            buffer.write(struct.pack("<LqL", mtime, size, parent_id))
+            self._write_string(buffer, name)
 
     @classmethod
-    def load_from_caf(cls, caf_path: Path, use_hash: bool, hash_algo: str) -> Optional["FileIndex"]:
-        """Loads index from CAF file with optimized buffered reading."""
-        if not caf_path.is_file():
-            return None
+    def load_from_caf(
+        cls, caf_path: Path, use_hash: bool, hash_algo: str, *, build_search_indices: bool = True
+    ) -> Optional["FileIndex"]:
+        """Load a complete CAF, including empty folders and zero-byte files.
 
-        with caf_path.open("rb") as buffer:
-            try:
-                # Header Check
+        CAF stores Latin-1 names and integer-second mtimes, but no file hashes.
+        The optional sort switch lets a caller merge multiple catalogs before
+        constructing the combined search indexes once.
+        """
+        try:
+            with caf_path.open("rb") as buffer:
                 magic = struct.unpack("<L", buffer.read(4))[0]
                 if not (magic > 0 and magic % cls.ulModus == cls.ulMagicBase):
                     return None
-                version = int(magic / cls.ulModus)
+                version = magic // cls.ulModus
                 if version > 2:
                     version = struct.unpack("<h", buffer.read(2))[0]
-                if version > cls.saveVersion:
+
+                if not 0 <= version <= cls.saveVersion:
                     return None
 
-                # Header Skip
-                buffer.read(4)
+                struct.unpack("<L", buffer.read(4))  # catalog creation time
                 device = cls._read_string(buffer) if version >= 2 else ""
-
-                # Path Logic
                 is_windows = "\\" in device or (len(device) > 1 and device[1] == ":")
-                PathClass = PureWindowsPath if is_windows else PurePosixPath
-                index = cls(PathClass(device), use_hash, hash_algo)
+                path_class = PureWindowsPath if is_windows else PurePosixPath
+                index = cls(path_class(device), use_hash, hash_algo)
+                # The root folder's mtime is not represented in CAF.
+                index.directory_mtimes[index.root_path] = 0
 
-                # Metadata Skip
                 cls._read_string(buffer)  # volume
                 cls._read_string(buffer)  # alias
-                buffer.read(4)  # serial
-                cls._read_string(buffer) if version >= 4 else ""
+                struct.unpack("<L", buffer.read(4))  # serial
+                if version >= 4:
+                    cls._read_string(buffer)
                 if version >= 1:
-                    buffer.read(4)
+                    struct.unpack("<f", buffer.read(4))
                 if version >= 6:
-                    buffer.read(2)
+                    struct.unpack("<h", buffer.read(2))
 
                 dir_count = struct.unpack("<l", buffer.read(4))[0]
+                if dir_count < 0:
+                    raise ValueError("Negative directory count")
                 for i in range(dir_count):
                     if i == 0 or version <= 3:
                         cls._read_string(buffer)
                     if version >= 3:
-                        buffer.read(12)
+                        struct.unpack("<ld", buffer.read(12))
 
-                # --- FAST BODY PARSING ---
                 data = buffer.read()
-                offset = 0
-                max_offset = len(data)
-
-                file_count = struct.unpack_from("<l", data, offset)[0]
-                offset += 4
-
-                raw_elm = []
-
-                # Determine struct format
+                file_count = struct.unpack_from("<l", data, 0)[0]
+                offset = 4
                 if version <= 6:
-                    fmt, step = "<LlH", 10
-                elif version <= 7:
-                    fmt, step = "<LqH", 14
+                    entry_struct = struct.Struct("<LlH")
+                elif version == 7:
+                    entry_struct = struct.Struct("<LqH")
                 else:
-                    fmt, step = "<LqL", 16
+                    entry_struct = struct.Struct("<LqL")
+                if file_count < 0 or file_count > (len(data) - offset) // (entry_struct.size + 1):
+                    raise ValueError("Truncated or invalid CAF entry count")
 
-                # Vectorized loop
+                raw_entries = []
                 for _ in range(file_count):
-                    if offset + step > max_offset:
-                        break
-                    mtime, size, parent_id = struct.unpack_from(fmt, data, offset)
-                    offset += step
+                    mtime, size, parent_id = entry_struct.unpack_from(data, offset)
+                    offset += entry_struct.size
+                    end = data.find(b"\x00", offset)
+                    if end == -1:
+                        raise ValueError("Unterminated CAF entry name")
+                    name = data[offset:end].decode("latin-1")
+                    cls._validate_caf_name(name)
+                    raw_entries.append((mtime, size, parent_id, name))
+                    offset = end + 1
 
-                    end_pos = data.find(b"\x00", offset)
-                    if end_pos == -1:
-                        filename = ""
+                # Legacy CAF identifies folders by the entry IDs referenced as
+                # parents. Modern versions encode a folder ID as a negative size.
+                referenced_ids = {parent for _, _, parent, _ in raw_entries}
+                directories = {}
+                files = []
+                for i, (mtime, size, parent, name) in enumerate(raw_entries):
+                    is_directory = (size < 0) if version > 6 else (i + 1) in referenced_ids
+                    if is_directory:
+                        directory_id = -size if version > 6 else i + 1
+                        if directory_id in directories:
+                            raise ValueError("Duplicate CAF directory ID")
+                        directories[directory_id] = (parent, name, mtime)
                     else:
-                        filename = data[offset:end_pos].decode("latin-1", errors="replace")
-                        offset = end_pos + 1
+                        # Keep the historical pre-v7 unknown-size convention.
+                        actual_size = 1024 if version <= 6 and size == 0 else size
+                        files.append((mtime, actual_size, parent, name))
 
-                    raw_elm.append((mtime, size, parent_id, filename))
+                # Resolve parents in linear time, even for forward references.
+                # A missing parent or cycle rejects the whole damaged catalog;
+                # silently dropping orphan files would look like a complete scan.
+                children = defaultdict(list)
+                for directory_id, (parent, name, mtime) in directories.items():
+                    if parent != 0 and parent not in directories:
+                        raise ValueError("Unknown CAF parent directory")
+                    children[parent].append((directory_id, name, mtime))
+                dir_paths = {0: index.root_path}
+                pending = [0]
+                while pending:
+                    parent_id = pending.pop()
+                    for directory_id, name, mtime in children[parent_id]:
+                        path = dir_paths[parent_id] / name
+                        dir_paths[directory_id] = path
+                        index.directory_mtimes[path] = mtime
+                        pending.append(directory_id)
+                if len(dir_paths) != len(directories) + 1:
+                    raise ValueError("Cyclic CAF directory hierarchy")
 
-                # Directory Reconstruction
-                referenced_parent_ids = {pid for _, _, pid, _ in raw_elm}
-                dir_path_map = {0: index.root_path}
-
-                # 1. Build Dirs
-                for i, (_mtime, size, pid, name) in enumerate(raw_elm):
-                    is_dir = (version > 6 and size < 0) or (version <= 6 and (i + 1) in referenced_parent_ids)
-                    if is_dir:
-                        dir_id = -size if version > 6 else (i + 1)
-                        if pid in dir_path_map and name:
-                            dir_path_map[dir_id] = dir_path_map[pid] / name
-
-                # 2. Add Files
-                for i, (mtime, size, pid, name) in enumerate(raw_elm):
-                    is_dir = (version > 6 and size < 0) or (version <= 6 and (i + 1) in referenced_parent_ids)
-                    if not is_dir and pid in dir_path_map and name.strip():
-                        path = dir_path_map[pid] / name
-                        actual_size = max(size, 1) if version > 6 else (max(size, 1024) if size == 0 else size)
-
-                        entry = FileEntry(path, actual_size, mtime, "")
-                        index.size_index[actual_size].append(entry)
-                        index.total_files += 1
-
-                # Final Optimization Step
-                index._flatten_index()
-                index.build_optimized_indices()  # Build O(log N) structures
-
+                for mtime, size, parent, name in files:
+                    if parent not in dir_paths:
+                        raise ValueError("Unknown CAF file parent")
+                    entry = FileEntry(dir_paths[parent] / name, size, mtime, "")
+                    index.size_index[size].append(entry)
+                    index.all_files.append(entry)
+                index.total_files = len(index.all_files)
+                if build_search_indices:
+                    index.build_optimized_indices()
                 return index
-
-            except Exception as e:
-                print(f"[CAF] Error: {e}", file=sys.stderr)
-                return None
+        except (OSError, ValueError, struct.error, OverflowError) as error:
+            print(f"[CAF] Error: {error}", file=sys.stderr)
+            return None
 
     def _flatten_index(self):
         """Populates the flat all_files list."""
@@ -374,6 +405,8 @@ class FileIndex:
                 version = int(magic / cls.ulModus)
                 if version > 2:
                     version = struct.unpack("<h", buffer.read(2))[0]
+                if not 0 <= version <= cls.saveVersion:
+                    return None
 
                 # Quick header parsing
                 created_timestamp = struct.unpack("<L", buffer.read(4))[0]
@@ -405,7 +438,7 @@ class FileIndex:
                     "freesize": freesize,
                 }
 
-            except (struct.error, OSError, IndexError):
+            except (struct.error, OSError, IndexError, ValueError, OverflowError):
                 return None
 
     @staticmethod
@@ -490,61 +523,103 @@ class FileIndex:
 
     # --- CAF Serialization Methods ---
 
-    def save_to_caf(self, caf_path: Path):
+    def save_to_caf(self, caf_path: Path, *, cancel_event=None):
+        """Atomically save a complete index in the Cathy-compatible v8 format.
+
+        The classic format cannot represent names outside Latin-1. Reject those
+        names, unsafe paths, and out-of-range metadata rather than replacing
+        characters or overwriting a previous good catalog with partial data.
         """
-        Saves the current in-memory index to a Cathy-compatible .caf file.
-        """
-        # 1. Prepare directory structure and metadata
-        dir_id_map: dict[Path, int] = {self.root_path: 0}
-        next_dir_id = 1
+        self._check_save_cancelled(cancel_event)
+        if self.cancelled:
+            raise InterruptedError("Catalog creation cancelled")
+        if self.scan_error_count:
+            raise ValueError("Cannot save an incomplete scan; resolve its scan errors and try again")
+        caf_path = Path(caf_path)
+        self._validate_caf_text(str(self.root_path))
+        self._validate_caf_text(self.root_path.name)
 
-        all_entries: list[FileEntry] = [e for entries in self.size_index.values() for e in entries]
+        all_entries = [entry for entries in self.size_index.values() for entry in entries]
+        directories = {self.root_path}
 
-        # Discover all unique directories and assign IDs
-        all_dirs = {entry.path.parent for entry in all_entries}
-        for d in sorted(all_dirs, key=lambda p: len(p.parts)):
-            if d not in dir_id_map:
-                dir_id_map[d] = next_dir_id
-                next_dir_id += 1
+        def include_directory(directory):
+            relative = directory.relative_to(self.root_path)
+            for component in relative.parts:
+                self._validate_caf_name(component)
+            while directory not in directories:
+                directories.add(directory)
+                directory = directory.parent
 
-        # 2. Build the `elm` list (all files and directories)
-        elm = []
-        dir_stats = defaultdict(lambda: {"file_count": 0, "total_size": 0})
-
-        # Add directories to elm list first
-        for dir_path, dir_id in dir_id_map.items():
-            if dir_id == 0:
-                continue
-            try:
-                parent_id = dir_id_map[dir_path.parent]
-                mtime = int(dir_path.stat().st_mtime)
-                # Directories are stored with their negative ID as the size
-                elm.append((mtime, -dir_id, parent_id, dir_path.name))
-            except (OSError, KeyError):
-                continue
-
-        # Add files to elm list and update directory stats
+        # Retain empty folders and every ancestor, even when only a deep leaf
+        # contains files. The original writer only kept the immediate parents.
+        for directory in self.directory_mtimes:
+            self._check_save_cancelled(cancel_event)
+            include_directory(directory)
         for entry in all_entries:
-            try:
-                parent_id = dir_id_map[entry.path.parent]
-                elm.append((entry.mtime, entry.size, parent_id, entry.path.name))
-                dir_stats[parent_id]["file_count"] += 1
-                dir_stats[parent_id]["total_size"] += entry.size
-            except KeyError:
-                continue
+            self._check_save_cancelled(cancel_event)
+            relative = entry.path.relative_to(self.root_path)
+            if not relative.parts:
+                raise ValueError("A catalog file cannot be its own root folder")
+            for component in relative.parts:
+                self._validate_caf_name(component)
+            if not 0 <= entry.size <= 0x7FFFFFFFFFFFFFFF:
+                raise ValueError(f"CAF cannot represent this file size: {entry.path}")
+            self._validate_caf_mtime(entry.mtime, entry.path)
+            include_directory(entry.path.parent)
 
-        # 3. Build the `info` list (directory summaries)
-        info = [(0, 0, 0)] * next_dir_id  # Pre-allocate list
-        for dir_id, stats in dir_stats.items():
-            info[dir_id] = (dir_id, stats["file_count"], stats["total_size"])
+        # Sorting by depth makes parent IDs available before their children and
+        # gives deterministic serialization without any second filesystem walk.
+        ordered_dirs = sorted(directories - {self.root_path}, key=lambda path: (len(path.parts), str(path)))
+        dir_id_map = {self.root_path: 0}
+        dir_id_map.update((path, i) for i, path in enumerate(ordered_dirs, 1))
+        if len(dir_id_map) > 0x7FFFFFFF or len(all_entries) + len(ordered_dirs) > 0x7FFFFFFF:
+            raise ValueError("Too many entries for the CAF format")
 
-        # Set root directory info (aggregate all stats)
-        total_file_count = sum(s["file_count"] for s in dir_stats.values())
-        total_catalog_size = sum(s["total_size"] for s in dir_stats.values())
-        info[0] = (0, total_file_count, total_catalog_size)
+        elements = []
+        stats = [[0, 0] for _ in dir_id_map]
+        for directory in ordered_dirs:
+            self._check_save_cancelled(cancel_event)
+            mtime = self.directory_mtimes.get(directory)
+            if mtime is None:
+                # Compatibility for callers that construct an index with
+                # add_file(). Scans and loaded catalogs already have metadata.
+                mtime = int(Path(directory).stat().st_mtime)
+            self._validate_caf_mtime(mtime, directory)
+            elements.append((mtime, -dir_id_map[directory], dir_id_map[directory.parent], directory.name))
+        for entry in all_entries:
+            self._check_save_cancelled(cancel_event)
+            parent_id = dir_id_map[entry.path.parent]
+            elements.append((entry.mtime, entry.size, parent_id, entry.path.name))
+            stats[parent_id][0] += 1
+            stats[parent_id][1] += entry.size
+        info = [(directory_id, count, size) for directory_id, (count, size) in enumerate(stats)]
+        info[0] = (0, len(all_entries), sum(entry.size for entry in all_entries))
+        self._write_caf(caf_path, elements, info, cancel_event)
 
-        # 4. Write the CAF file
-        self._write_caf(caf_path, elm, info)
+    @staticmethod
+    def _check_save_cancelled(cancel_event):
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("Catalog creation cancelled")
+
+    @staticmethod
+    def _validate_caf_mtime(mtime, path):
+        if not isinstance(mtime, int) or not 0 <= mtime <= 0xFFFFFFFF:
+            raise ValueError(f"CAF requires a timestamp from 1970 through 2106: {path}")
+
+    @staticmethod
+    def _validate_caf_text(text):
+        if "\x00" in text:
+            raise ValueError("CAF names and paths cannot contain a NUL character")
+        try:
+            text.encode("latin-1")
+        except UnicodeEncodeError as error:
+            raise ValueError(f"CAF supports Latin-1 names only; this name cannot be saved: {text!r}") from error
+
+    @classmethod
+    def _validate_caf_name(cls, name):
+        cls._validate_caf_text(name)
+        if not name or name in (".", "..") or "/" in name or "\\" in name:
+            raise ValueError(f"Invalid CAF path component: {name!r}")
 
     # --- Private static I/O helpers ---
     @staticmethod
@@ -552,11 +627,12 @@ class FileIndex:
         chars = bytearray()
         while (char := buffer.read(1)) != b"\x00":
             if not char:
-                break
+                raise ValueError("Unterminated CAF string")
             chars.extend(char)
-        return chars.decode("latin-1", errors="replace")
+        return chars.decode("latin-1")
 
-    @staticmethod
-    def _write_string(buffer, text: str):
-        buffer.write(text.encode("latin-1", errors="replace"))
+    @classmethod
+    def _write_string(cls, buffer, text: str):
+        cls._validate_caf_text(text)
+        buffer.write(text.encode("latin-1"))
         buffer.write(b"\x00")
