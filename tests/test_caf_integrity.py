@@ -4,7 +4,7 @@ import io
 import os
 import shutil
 import struct
-from pathlib import PureWindowsPath
+from pathlib import PurePosixPath, PureWindowsPath
 from threading import Event
 
 import pytest
@@ -42,21 +42,23 @@ def _index_with_entry(root, name="good.txt", size=0, mtime=1730000000):
 
 
 def _rows(index):
-    return {str(e.path.relative_to(index.root_path)): (e.size, e.mtime) for e in index.all_files}
+    return {e.path.relative_to(index.root_path).as_posix(): (e.size, e.mtime) for e in index.all_files}
 
 
 def test_deep_ancestors_empty_folders_zero_and_latin1_roundtrip_offline(tmp_path):
     root = tmp_path / "source"
     (root / "first" / "second").mkdir(parents=True)
     (root / "empty" / "also-empty").mkdir(parents=True)
-    for name, content in {"first/second/café.txt": b"accent", ".hidden": b"", " ": b"space"}.items():
+    for name, content in {"first/second/café.txt": b"accent", ".hidden": b"", "space name.txt": b"space"}.items():
         (root / name).write_bytes(content)
         os.utime(root / name, (1730000000, 1730000000))
     for directory in (root / "first", root / "first/second", root / "empty", root / "empty/also-empty"):
         os.utime(directory, (1730000001, 1730000001))
     index = FileIndex.scan_directory(root, True, "sha256")
     expected = _rows(index)
-    directory_mtimes = {str(p.relative_to(root)): mtime for p, mtime in index.directory_mtimes.items() if p != root}
+    directory_mtimes = {
+        p.relative_to(root).as_posix(): mtime for p, mtime in index.directory_mtimes.items() if p != root
+    }
     catalog = tmp_path / "saved.caf"
     index.save_to_caf(catalog)
     shutil.rmtree(root)
@@ -65,7 +67,9 @@ def test_deep_ancestors_empty_folders_zero_and_latin1_roundtrip_offline(tmp_path
     assert loaded is not None
     assert _rows(loaded) == expected
     assert {
-        str(p.relative_to(loaded.root_path)): m for p, m in loaded.directory_mtimes.items() if p != loaded.root_path
+        p.relative_to(loaded.root_path).as_posix(): m
+        for p, m in loaded.directory_mtimes.items()
+        if p != loaded.root_path
     } == directory_mtimes
     assert all(not e.hash for e in loaded.all_files)  # CAF has no hash field.
     saved_again = tmp_path / "saved-again.caf"
@@ -86,7 +90,7 @@ def test_add_file_callers_also_keep_all_ancestors(tmp_path):
     index.save_to_caf(catalog)
     loaded = FileIndex.load_from_caf(catalog, False, "md5")
     assert _rows(loaded) == _rows(index)
-    assert {str(p.relative_to(loaded.root_path)) for p in loaded.directory_mtimes} == {".", "a", "a/b", "a/b/c"}
+    assert {p.relative_to(loaded.root_path).as_posix() for p in loaded.directory_mtimes} == {".", "a", "a/b", "a/b/c"}
 
 
 @pytest.mark.parametrize("version", [7, 8])
@@ -107,6 +111,13 @@ def test_legacy_v6_keeps_its_unknown_zero_size_convention(tmp_path):
     assert _rows(loaded) == {"parent/unknown": (1024, 12)}
 
 
+def test_whitespace_only_caf_filename_is_retained(tmp_path):
+    catalog = tmp_path / "spaces.caf"
+    catalog.write_bytes(_independent_caf(8, [(12, 0, 0, " ")]))
+    loaded = FileIndex.load_from_caf(catalog, False, "md5")
+    assert _rows(loaded) == {" ": (0, 12)}
+
+
 def test_foreign_windows_paths_can_be_saved_again_without_disk_access(tmp_path):
     catalog = tmp_path / "windows.caf"
     catalog.write_bytes(_independent_caf(8, [(11, -1, 0, "café"), (12, 0, 1, "zero")], r"Z:\offline"))
@@ -121,7 +132,7 @@ def test_foreign_windows_paths_can_be_saved_again_without_disk_access(tmp_path):
 def test_unsupported_names_reject_without_replacing_existing_catalog(tmp_path, name):
     catalog = tmp_path / "old.caf"
     catalog.write_bytes(b"previous good catalog")
-    index = _index_with_entry(tmp_path, name)
+    index = _index_with_entry(PurePosixPath(tmp_path.as_posix()), name)
     with pytest.raises(ValueError):
         index.save_to_caf(catalog)
     assert catalog.read_bytes() == b"previous good catalog"

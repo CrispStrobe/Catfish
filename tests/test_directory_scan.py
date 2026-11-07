@@ -25,7 +25,7 @@ def test_keeps_hidden_unicode_zero_and_directory_metadata(tmp_path):
     index = FileIndex.scan_directory(tmp_path)
     assert index.is_complete
     assert index.total_files == 4
-    assert {str(e.path.relative_to(tmp_path)): (e.size, e.mtime) for e in index.all_files} == {
+    assert {e.path.relative_to(tmp_path).as_posix(): (e.size, e.mtime) for e in index.all_files} == {
         name: (len(content), 1730000000) for name, content in files.items()
     }
     assert set(index.directory_mtimes) == {
@@ -71,7 +71,7 @@ def test_preserves_file_link_following_but_does_not_descend_directory_links(tmp_
     for selected in (root, selected_root):
         index = FileIndex.scan_directory(selected, use_hash=True, hash_algo="sha256")
         assert index.is_complete
-        rows = {str(e.path.relative_to(selected)): e for e in index.all_files}
+        rows = {e.path.relative_to(selected).as_posix(): e for e in index.all_files}
         assert set(rows) == {"file-link.txt", "sub/inside.txt"}
         assert rows["file-link.txt"].size == len(b"external target")
         assert rows["file-link.txt"].hash == hashlib.sha256(b"external target").hexdigest()
