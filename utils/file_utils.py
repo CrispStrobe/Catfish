@@ -53,12 +53,17 @@ def format_size(size_bytes: int) -> str:
     return f"{size:.1f} PB"
 
 
-def calculate_file_hash(file_path: Path, hash_algo: str) -> str:
-    """Calculates the hash of a file."""
+def calculate_file_hash(file_path: Path, hash_algo: str, *, cancel_event=None) -> str:
+    """Hash every byte in bounded chunks; cancellation never returns a partial hash."""
     hash_obj = hashlib.new(hash_algo)
     try:
         with file_path.open("rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    return ""
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
                 hash_obj.update(chunk)
         return hash_obj.hexdigest()
     except OSError as e:

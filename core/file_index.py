@@ -2,6 +2,7 @@
 
 """File indexing and CAF format handling."""
 
+import os
 import stat
 import struct
 import sys
@@ -9,9 +10,9 @@ import time
 from collections import defaultdict
 from datetime import datetime as dt
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Optional
+from typing import Callable, Optional
 
-from core.data_structures import DuplicateMatch, FileEntry
+from core.data_structures import DuplicateMatch, FileEntry, ScanError
 from utils.file_utils import calculate_file_hash, format_size, path_is_native_and_exists
 
 
@@ -42,11 +43,120 @@ class FileIndex:
         self.suffix_index: list[tuple[str, FileEntry]] = []  # Sorted by reversed name
 
         self.total_files = 0
+        self.directory_mtimes: dict[Path, int] = {}
+        self.scan_errors: list[ScanError] = []
+        self.scan_error_count = 0
+        self.cancelled = False
 
-    def add_file(self, file_path: Path) -> bool:
-        """Adds a file to the in-memory index."""
+    @property
+    def is_complete(self) -> bool:
+        return not self.cancelled and self.scan_error_count == 0
+
+    def _record_scan_error(self, path: Path, error: object):
+        self.scan_error_count += 1
+        if len(self.scan_errors) < 1000:
+            self.scan_errors.append(ScanError(path, str(error)))
+
+    @classmethod
+    def scan_directory(
+        cls,
+        root_path: Path,
+        use_hash: bool = False,
+        hash_algo: str = "md5",
+        *,
+        progress_callback: Optional[Callable[[int, Path], None]] = None,
+        cancel_event=None,
+        progress_interval: float = 0.1,
+    ) -> "FileIndex":
+        """Index a native folder in one metadata pass.
+
+        Reuse DirEntry metadata instead of discarding it and calling Path.stat
+        again. As with the original os.walk scanner, file links are followed,
+        directory links are not descended, and a selected root may itself be a
+        directory link. Hidden names are included. Failures and cancellation
+        remain explicit so an incomplete scan cannot silently replace a catalog.
+        """
+        if progress_interval < 0:
+            raise ValueError("The progress interval cannot be negative")
+        root_path = Path(root_path)
+        index = cls(root_path, use_hash, hash_algo)
+        last_progress = 0.0
+
+        def cancelled():
+            if cancel_event is not None and cancel_event.is_set():
+                index.cancelled = True
+            return index.cancelled
+
+        def progress(path, *, force=False):
+            nonlocal last_progress
+            if progress_callback is None:
+                return
+            now = time.monotonic()
+            if force or now - last_progress >= progress_interval:
+                last_progress = now
+                progress_callback(index.total_files, path)
+
+        if cancelled():
+            return index
+        progress(root_path, force=True)
+        if cancelled():
+            return index
         try:
-            stat_info = file_path.stat()
+            root_info = root_path.stat()
+            if not stat.S_ISDIR(root_info.st_mode):
+                raise NotADirectoryError(f"Not a directory: {root_path}")
+            index.directory_mtimes[root_path] = int(root_info.st_mtime)
+        except OSError as error:
+            index._record_scan_error(root_path, error)
+            return index
+
+        pending = [root_path]
+        while pending and not cancelled():
+            directory = pending.pop()
+            # Recheck queued folders before descent, just as os.walk does when
+            # followlinks=False. The chosen root keeps its historical behavior.
+            subdirectories = []
+            try:
+                if directory != root_path and directory.is_symlink():
+                    index._record_scan_error(directory, "The folder became a symbolic link before it was scanned")
+                    continue
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        if cancelled():
+                            break
+                        path = directory / entry.name
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                info = entry.stat(follow_symlinks=False)
+                                if not stat.S_ISDIR(info.st_mode):
+                                    raise OSError("The folder changed while its metadata was read")
+                                index.directory_mtimes[path] = int(info.st_mtime)
+                                subdirectories.append(path)
+                            else:
+                                # File symlinks retain the original target-size
+                                # and target-hash semantics. Special files and
+                                # links to directories are never opened/read.
+                                index.add_file(path, stat_info=entry.stat(), cancel_event=cancel_event)
+                        except OSError as error:
+                            index._record_scan_error(path, error)
+                        progress(path)
+            except OSError as error:
+                index._record_scan_error(directory, error)
+            # Preserve os.walk's depth-first directory order without recursion.
+            pending.extend(reversed(subdirectories))
+        cancelled()
+        progress(root_path, force=True)
+        cancelled()
+        return index
+
+    def add_file(self, file_path: Path, *, stat_info: Optional[os.stat_result] = None, cancel_event=None) -> bool:
+        """Add a file, optionally using metadata already obtained by a scan."""
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                self.cancelled = True
+                return False
+            if stat_info is None:
+                stat_info = file_path.stat()
             if not stat.S_ISREG(stat_info.st_mode):
                 return False
 
@@ -55,8 +165,12 @@ class FileIndex:
 
             file_hash = ""
             if self.use_hash:
-                file_hash = calculate_file_hash(file_path, self.hash_algo)
+                file_hash = calculate_file_hash(file_path, self.hash_algo, cancel_event=cancel_event)
                 if not file_hash:
+                    if cancel_event is not None and cancel_event.is_set():
+                        self.cancelled = True
+                    else:
+                        self._record_scan_error(file_path, f"Could not calculate the {self.hash_algo} hash")
                     return False
 
             entry = FileEntry(file_path, file_size, mtime, file_hash)
@@ -68,15 +182,20 @@ class FileIndex:
                 self.hash_index[(file_size, file_hash)].append(entry)
 
             self.total_files += 1
+            if self.is_optimized:
+                self.is_optimized = False
+                self.prefix_index = []
+                self.suffix_index = []
             return True
-        except OSError:
+        except OSError as error:
+            self._record_scan_error(file_path, error)
             return False
 
     def build_optimized_indices(self):
         """
         Builds O(log N) search structures. Call this once after loading.
         """
-        if not self.all_files:
+        if self.is_optimized or not self.all_files:
             return
 
         print(
@@ -89,10 +208,11 @@ class FileIndex:
 
         # 1. Prefix Index: Sort by lowercase name for 'start*' queries
         # We store tuples (key, entry) to allow bisecting on the key
-        self.prefix_index = sorted([(e.path.name.lower(), e) for e in self.all_files], key=lambda x: x[0])
+        names = [(e.path.name.lower(), e) for e in self.all_files]
+        self.prefix_index = sorted(names, key=lambda x: x[0])
 
         # 2. Suffix Index: Sort by REVERSED lowercase name for '*.ext' queries
-        self.suffix_index = sorted([(e.path.name.lower()[::-1], e) for e in self.all_files], key=lambda x: x[0])
+        self.suffix_index = sorted([(name[::-1], entry) for name, entry in names], key=lambda x: x[0])
 
         self.is_optimized = True
         elapsed = time.time() - t0
