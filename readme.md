@@ -25,6 +25,15 @@ It creates and uses catalog files (`.caf`) that are backwards-compatible with th
 
 -----
 
+## CAF compatibility
+
+CAF v7/v8 file records preserve exact zero-byte sizes. Legacy v1–v6 zero-size
+records retain the historical unknown-size convention. Classic CAF uses
+Latin-1 names; the current Python writer replaces characters outside that
+encoding, so use a Unicode-native catalogue when exact such names matter.
+The Rust catalogue slice in CrispSorter and CrispCloud's native catalogue API
+provide a reusable implementation without shipping this Python GUI.
+
 ## Getting Started
 
 ### For Users (Recommended)

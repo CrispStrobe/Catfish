@@ -218,7 +218,7 @@ class FileIndex:
                     is_dir = (version > 6 and size < 0) or (version <= 6 and (i + 1) in referenced_parent_ids)
                     if not is_dir and pid in dir_path_map and name.strip():
                         path = dir_path_map[pid] / name
-                        actual_size = max(size, 1) if version > 6 else (max(size, 1024) if size == 0 else size)
+                        actual_size = size if version > 6 else (1024 if size == 0 else size)
 
                         entry = FileEntry(path, actual_size, mtime, "")
                         index.size_index[actual_size].append(entry)
