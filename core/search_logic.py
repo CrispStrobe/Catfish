@@ -4,8 +4,8 @@
 
 import bisect
 import fnmatch
-import os
 import re
+import sys
 import time
 from datetime import datetime as dt
 from pathlib import Path
@@ -210,10 +210,8 @@ def build_destination_index(
 
     for i, dest_path in enumerate(filtered_paths):
         if cancel_event and cancel_event.is_set():
+            combined_index.cancelled = True
             break
-        if not dest_path.is_dir():
-            continue
-
         caf_path = get_caf_path(dest_path, config.hash_algo)
         dest_index = None
 
@@ -224,29 +222,39 @@ def build_destination_index(
         if config.reuse_indices and not config.recreate_indices and caf_path.exists():
             if progress_callback:
                 progress_callback(f"Loading index for {dest_path.name}", "Please wait...")
-            dest_index = FileIndex.load_from_caf(caf_path, config.use_hash, config.hash_algo)
+            dest_index = FileIndex.load_from_caf(
+                caf_path, config.use_hash, config.hash_algo, build_search_indices=False
+            )
 
         # Build new index if needed
         if not dest_index:
             if progress_callback:
                 progress_callback(f"Creating new index for {dest_path.name}", t_get("scanning_files"))
-            dest_index = FileIndex(dest_path, config.use_hash, config.hash_algo)
-            for root, _, files in os.walk(dest_path):
-                if cancel_event and cancel_event.is_set():
-                    break
-                root_path = Path(root)
-                for j, filename in enumerate(files):
-                    if cancel_event and cancel_event.is_set():
-                        break
-                    if progress_callback and j % 200 == 0:
-                        progress_callback(f"Indexing {dest_path.name}", f"File: {filename}")
-                    dest_index.add_file(root_path / filename)
+
+            def scan_progress(count, path, folder=dest_path):
+                if progress_callback:
+                    progress_callback(f"Indexing {folder.name}", f"Indexed {count} files · {path.name}")
+
+            dest_index = FileIndex.scan_directory(
+                dest_path,
+                config.use_hash,
+                config.hash_algo,
+                progress_callback=scan_progress if progress_callback else None,
+                cancel_event=cancel_event,
+            )
             if cancel_event and cancel_event.is_set():
+                combined_index.cancelled = True
                 break
-            if config.reuse_indices:
+            if dest_index.scan_error_count:
+                _report_scan_errors(dest_index, progress_callback)
+            if config.reuse_indices and dest_index.is_complete:
                 if progress_callback:
                     progress_callback(f"Saving index for {dest_path.name}", f"Path: {caf_path.name}")
-                dest_index.save_to_caf(caf_path)
+                try:
+                    dest_index.save_to_caf(caf_path, cancel_event=cancel_event)
+                except InterruptedError:
+                    combined_index.cancelled = True
+                    break
 
         if not dest_index:
             continue
@@ -259,6 +267,9 @@ def build_destination_index(
             for key, entries in dest_index.hash_index.items():
                 combined_index.hash_index[key].extend(entries)
         combined_index.total_files += dest_index.total_files
+        combined_index.directory_mtimes.update(dest_index.directory_mtimes)
+        combined_index.scan_error_count += dest_index.scan_error_count
+        combined_index.scan_errors.extend(dest_index.scan_errors[: max(0, 1000 - len(combined_index.scan_errors))])
 
     combined_index.build_optimized_indices()
     return combined_index
@@ -267,22 +278,35 @@ def build_destination_index(
 def find_duplicates_with_locations(
     source_path: Path, dest_index: FileIndex, progress_callback=None, cancel_event=None
 ) -> list[DuplicateMatch]:
-    source_index = FileIndex(source_path, dest_index.use_hash, dest_index.hash_algo)
     if progress_callback:
         progress_callback(t.get("finding_duplicates"), f"Indexing source directory: {source_path.name}")
-    file_count = 0
-    for root, _, files in os.walk(source_path):
-        if cancel_event and cancel_event.is_set():
-            return []
-        root_path = Path(root)
-        for filename in files:
-            if cancel_event and cancel_event.is_set():
-                return []
-            file_count += 1
-            if progress_callback and file_count % 500 == 0:
-                progress_callback("Indexing source", f"Processed {file_count} source files")
-            source_index.add_file(root_path / filename)
+
+    def scan_progress(count, path):
+        if progress_callback:
+            progress_callback("Indexing source", f"Indexed {count} source files · {path.name}")
+
+    source_index = FileIndex.scan_directory(
+        source_path,
+        dest_index.use_hash,
+        dest_index.hash_algo,
+        progress_callback=scan_progress if progress_callback else None,
+        cancel_event=cancel_event,
+    )
+    if source_index.cancelled:
+        return []
+    if source_index.scan_error_count:
+        _report_scan_errors(source_index, progress_callback)
     source_index._flatten_index()
     if progress_callback:
         progress_callback(t.get("finding_duplicates"), "Comparing against destination indices...")
     return FileIndex.find_all_duplicates_bulk(source_index, dest_index, progress_callback, cancel_event)
+
+
+def _report_scan_errors(index: FileIndex, progress_callback=None):
+    message = (
+        f"{index.root_path}: {index.scan_error_count} entries or folders could not be indexed. "
+        "Results are incomplete; no replacement catalog was saved."
+    )
+    print(f"Warning: {message}", file=sys.stderr)
+    if progress_callback:
+        progress_callback("Scan warnings", message)

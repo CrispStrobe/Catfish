@@ -113,6 +113,22 @@ class TestBuildDestinationIndex:
         index = build_destination_index(config)
         assert index is not None
         assert index.total_files == 1
+        assert not index.is_complete
+        assert index.scan_error_count == 1
+        assert index.scan_errors[0].path == tmp_path / "nonexistent"
+
+    def test_saved_catalog_can_still_be_reused_when_original_root_is_offline(self, tmp_path):
+        root = tmp_path / "source"
+        self._make_tree(root, {"file.txt": "offline metadata"})
+        config = ScanConfig(tmp_path, [root], False, "md5", True, False)
+        first = build_destination_index(config)
+        root.rename(tmp_path / "unmounted-source")
+        reused = build_destination_index(config)
+        assert reused.is_complete
+        assert reused.total_files == first.total_files == 1
+        assert [(entry.path, entry.size, entry.mtime) for entry in reused.all_files] == [
+            (entry.path, entry.size, entry.mtime) for entry in first.all_files
+        ]
 
     def test_progress_callback_invoked(self, tmp_path):
         dst = tmp_path / "dest"

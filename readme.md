@@ -245,3 +245,7 @@ Many thanks to Robert Vasicek for the [awesome Cathy tool](http://rva.mtg.sk/) a
 ## License
 
 This project is licensed under the **MIT License**. Use at your own risk. **Always back up important data** before performing file deletion operations.
+
+## Catalogue scanning and CAF interchange
+
+Catalogue creation uses one cancellable metadata pass, retains empty directories and timestamps, and reports incomplete scans. Saves publish atomically; loading rejects damaged hierarchy and ambiguous paths. Modern CAF zero-byte files remain exactly zero bytes. Duplicate hashing rejects files that change while being read. CAF is useful as a portable dated snapshot; a separate live database is not kept synchronized automatically.

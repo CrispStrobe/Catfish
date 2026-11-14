@@ -4,11 +4,30 @@
 
 import tkinter as tk
 from pathlib import Path
-from threading import Thread
+from queue import Empty, Queue
+from threading import Event, Thread
 from tkinter import messagebox, ttk
 
+from core.catalog_creation import create_catalog
 from core.config import Config
-from core.file_index import FileIndex
+
+
+def _create_catalog_worker(folder, output, use_hash, hash_algo, cancel_event, messages):
+    """Worker messages contain plain data; every Tk call stays on the UI thread."""
+    try:
+        create_catalog(
+            folder,
+            output,
+            use_hash,
+            hash_algo,
+            progress_callback=lambda text: messages.put(("progress", text)),
+            cancel_event=cancel_event,
+        )
+        messages.put(("success", None))
+    except InterruptedError:
+        messages.put(("cancelled", None))
+    except Exception as error:
+        messages.put(("error", str(error)))
 
 
 class IndexCreationDialog:
@@ -19,11 +38,18 @@ class IndexCreationDialog:
         self.folder_path = folder_path
         self.config = config
         self.result = False
+        self.cancel_event = Event()
+        self._messages = Queue()
+        self._running = False
+        self._closed = False
+        self._poll_id = None
+        self._active_output = None
 
         self.root = tk.Toplevel(parent)
         self.root.title("Create New Index")
-        self.root.geometry("400x300")
-        self.root.resizable(False, False)
+        self.root.geometry("520x440")
+        self.root.minsize(420, 400)
+        self.root.protocol("WM_DELETE_WINDOW", self.cancel)
 
         # Make modal
         self.root.transient(parent)
@@ -46,7 +72,7 @@ class IndexCreationDialog:
 
         self.use_hash_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
-            hash_frame, text="Include file hashes", variable=self.use_hash_var, command=self.on_hash_toggle
+            hash_frame, text="Calculate file hashes", variable=self.use_hash_var, command=self.on_hash_toggle
         ).pack(anchor=tk.W)
 
         self.hash_algo_var = tk.StringVar(value=self.config.get("default_hash_algo", "md5"))
@@ -54,6 +80,11 @@ class IndexCreationDialog:
             hash_frame, textvariable=self.hash_algo_var, values=["md5", "sha1", "sha256"], width=10, state="readonly"
         )
         self.hash_combo.pack(anchor=tk.W, pady=(5, 0))
+        ttk.Label(
+            hash_frame,
+            text="CAF stores names, sizes and dates. File hashes are calculated for this scan only.",
+            wraplength=430,
+        ).pack(anchor=tk.W, pady=(6, 0))
 
         # Output file
         output_frame = ttk.LabelFrame(main_frame, text="Output File", padding=10)
@@ -75,7 +106,8 @@ class IndexCreationDialog:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X)
 
-        ttk.Button(button_frame, text="Create Index", command=self.create_index).pack(side=tk.LEFT)
+        self.create_button = ttk.Button(button_frame, text="Create Index", command=self.create_index)
+        self.create_button.pack(side=tk.LEFT)
         ttk.Button(button_frame, text="Cancel", command=self.cancel).pack(side=tk.RIGHT)
 
     def on_hash_toggle(self):
@@ -95,71 +127,96 @@ class IndexCreationDialog:
         self.output_var.set(str(output_path))
 
     def create_index(self):
-        """Create the index file."""
-        output_path = Path(self.output_var.get())
-
-        # Check if file already exists
+        """Capture options on the UI thread and start one cancellable scan."""
+        if self._running or self._closed:
+            return
+        output = self.output_var.get().strip()
+        if not output:
+            self.creation_error("Choose an output filename.")
+            return
+        output_path = Path(output)
+        if output_path.is_dir():
+            self.creation_error("The output path is a folder; choose a .caf filename.")
+            return
         if output_path.exists() and not messagebox.askyesno(
-            "File Exists", f"Index file already exists:\n{output_path.name}\n\nOverwrite?"
+            "File Exists", f"Index file already exists:\n{output_path.name}\n\nOverwrite?", parent=self.root
         ):
             return
 
-        # Start creation in thread
+        # Tk variables may only be read on this thread. A worker receives plain
+        # immutable settings, its own cancellation event, and a message queue.
+        use_hash = self.use_hash_var.get()
+        hash_algo = self.hash_algo_var.get()
+        self.cancel_event = Event()
+        self._messages = Queue()
+        self._active_output = output_path
+        self._running = True
+        self.create_button.configure(state="disabled")
         self.progress.start()
-        self.progress_var.set("Creating index...")
+        self.progress_var.set("Scanning files…")
+        Thread(
+            target=_create_catalog_worker,
+            args=(self.folder_path, output_path, use_hash, hash_algo, self.cancel_event, self._messages),
+            daemon=True,
+        ).start()
+        self._poll_id = self.root.after(50, self._poll_creation)
 
-        def create_thread():
+    def _poll_creation(self):
+        self._poll_id = None
+        if self._closed:
+            return
+        while True:
             try:
-                index = FileIndex(self.folder_path, self.use_hash_var.get(), self.hash_algo_var.get())
-
-                # Count total files first
-                total_files = sum(1 for _ in self.folder_path.rglob("*") if _.is_file())
-                processed = 0
-
-                # Add files to index
-                for file_path in self.folder_path.rglob("*"):
-                    if file_path.is_file():
-                        index.add_file(file_path)
-                        processed += 1
-
-                        if processed % 100 == 0:
-                            count = processed  # capture for closure
-                            self.root.after(
-                                0, lambda c=count: self.progress_var.set(f"Processing files... {c}/{total_files}")
-                            )
-
-                # Save index
-                self.root.after(0, lambda: self.progress_var.set("Saving index file..."))
-                index.save_to_caf(output_path)
-
-                # Success
-                self.root.after(0, self.creation_success)
-
-            except Exception as e:
-                error_msg = str(e)
-                self.root.after(0, lambda msg=error_msg: self.creation_error(msg))
-
-        thread = Thread(target=create_thread)
-        thread.daemon = True
-        thread.start()
+                kind, message = self._messages.get_nowait()
+            except Empty:
+                break
+            if kind == "progress":
+                self.progress_var.set(message)
+            elif kind == "success":
+                self.creation_success()
+                return
+            elif kind == "error":
+                self.creation_error(message)
+                return
+            elif kind == "cancelled":
+                self._running = False
+                self.progress.stop()
+                self.progress_var.set("Creation cancelled")
+                self.create_button.configure(state="normal")
+                return
+        if self._running:
+            self._poll_id = self.root.after(50, self._poll_creation)
 
     def creation_success(self):
-        """Handle successful index creation."""
+        """Handle successful index creation on the UI thread."""
+        self._running = False
         self.progress.stop()
         self.progress_var.set("Index created successfully!")
-        messagebox.showinfo("Success", f"Index file created:\n{self.output_var.get()}")
+        messagebox.showinfo("Success", f"Index file created:\n{self._active_output}", parent=self.root)
         self.result = True
-        self.root.destroy()
+        self._close()
 
     def creation_error(self, error_msg):
-        """Handle index creation error."""
+        """Keep the dialog open so its options can be corrected and retried."""
+        self._running = False
         self.progress.stop()
+        self.create_button.configure(state="normal")
         self.progress_var.set("Creation failed")
-        messagebox.showerror("Error", f"Failed to create index:\n{error_msg}")
+        messagebox.showerror("Error", f"Failed to create index:\n{error_msg}", parent=self.root)
+
+    def _close(self):
+        if self._closed:
+            return
+        self._closed = True
+        if self._poll_id is not None:
+            self.root.after_cancel(self._poll_id)
+            self._poll_id = None
+        self.root.destroy()
 
     def cancel(self):
-        """Cancel the dialog."""
-        self.root.destroy()
+        """Stop scanning/hashing/saving and ignore any late worker messages."""
+        self.cancel_event.set()
+        self._close()
 
     def run(self):
         """Run the dialog."""

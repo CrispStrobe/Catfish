@@ -14,6 +14,13 @@ class FileEntry(NamedTuple):
     hash: str = ""
 
 
+class ScanError(NamedTuple):
+    """An entry or directory that could not be indexed."""
+
+    path: Path
+    message: str
+
+
 class DuplicateMatch(NamedTuple):
     """Represents a source file and a list of its found duplicates."""
 

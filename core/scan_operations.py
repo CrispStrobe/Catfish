@@ -15,6 +15,7 @@ def run_scan_with_progress(config: ScanConfig, parent, translator_get_func) -> l
 
     progress_window = ProgressWindow(parent, translator_get_func("finding_duplicates"))
     duplicates: list[DuplicateMatch] = []
+    scan_warnings = []
 
     progress_queue: queue.Queue[tuple[str, str, str]] = queue.Queue()
 
@@ -26,11 +27,19 @@ def run_scan_with_progress(config: ScanConfig, parent, translator_get_func) -> l
                 if message_type == "progress":
                     progress_window.update_operation(operation)
                     progress_window.update_details(details)
+                    if operation == "Scan warnings" and details not in scan_warnings:
+                        scan_warnings.append(details)
                 elif message_type == "error":
                     from tkinter import messagebox
 
                     messagebox.showerror(translator_get_func("error"), translator_get_func("scan_failed", details))
                 elif message_type == "complete":
+                    if scan_warnings and not progress_window.cancelled.is_set():
+                        from tkinter import messagebox
+
+                        messagebox.showwarning(
+                            "Scan incomplete", "\n\n".join(scan_warnings), parent=progress_window.root
+                        )
                     progress_window.root.quit()
                     return
         except queue.Empty:
